@@ -771,7 +771,242 @@ class PowerSystem:
         # Update busdata with new voltage values
         self.busdata[:, 2] = self.Vm
         self.busdata[:, 3] = self.deltad
+
+    def perturbation(self):
+        """Power Flow Solution by the Power Perturbation Technique."""
+        # Import necessary libraries at the beginning
+        ns = 0
+        nbus = len(self.busdata)
         
+        # Initialize arrays
+        kb = np.zeros(nbus+1, dtype=int)
+        Vm = np.zeros(nbus+1)
+        delta = np.zeros(nbus+1)
+        Pd = np.zeros(nbus+1)
+        Qd = np.zeros(nbus+1)
+        Pg = np.zeros(nbus+1)
+        Qg = np.zeros(nbus+1)
+        Qmin = np.zeros(nbus+1)
+        Qmax = np.zeros(nbus+1)
+        Qsh = np.zeros(nbus+1)
+        P = np.zeros(nbus+1)
+        Q = np.zeros(nbus+1)
+        S = np.zeros(nbus+1, dtype=complex)
+        V = np.zeros(nbus+1, dtype=complex)
+        nss = np.zeros(nbus+1, dtype=int)
+        
+        self.yload = np.zeros(nbus+1, dtype=complex)
+        
+        # Process bus data
+        for k in range(nbus):
+            n = int(self.busdata[k, 0])
+            kb[n] = int(self.busdata[k, 1])
+            Vm[n] = self.busdata[k, 2]
+            delta[n] = self.busdata[k, 3]
+            Pd[n] = self.busdata[k, 4]
+            Qd[n] = self.busdata[k, 5]
+            Pg[n] = self.busdata[k, 6]
+            Qg[n] = self.busdata[k, 7]
+            Qmin[n] = self.busdata[k, 8]
+            Qmax[n] = self.busdata[k, 9]
+            Qsh[n] = self.busdata[k, 10]
+            
+            if Vm[n] <= 0:
+                Vm[n] = 1.0
+                V[n] = 1.0 + 0j
+            else:
+                delta[n] = np.pi/180 * delta[n]
+                V[n] = Vm[n] * (np.cos(delta[n]) + 1j * np.sin(delta[n]))
+                P[n] = (Pg[n] - Pd[n]) / self.basemva
+                Q[n] = (Qg[n] - Qd[n] + Qsh[n]) / self.basemva
+                S[n] = P[n] + 1j * Q[n]
+            
+            if kb[n] == 1:
+                ns += 1
+            nss[n] = ns
+        
+        # Count non-swing buses
+        ii = 0
+        for ib in range(1, nbus+1):
+            if kb[ib] == 0 or kb[ib] == 2:
+                ii += 1
+        
+        # Create Y1 matrix
+        Y1 = np.zeros((ii+1, ii+1), dtype=complex)
+        
+        # Fill Y1 matrix
+        ii = 0
+        for ib in range(1, nbus+1):
+            if kb[ib] == 0 or kb[ib] == 2:
+                ii += 1
+                jj = 0
+                for jb in range(1, nbus+1):
+                    if kb[jb] == 0 or kb[jb] == 2:
+                        jj += 1
+                        Y1[ii, jj] = self.Ybus[ib-1, jb-1]
+        
+        # Copy to YS
+        YS = Y1.copy()
+        
+        # Initialize I array for iteration
+        I = np.zeros(ii+1, dtype=complex)
+        
+        # Initialize iteration
+        maxerror = 1.0
+        self.iter = 0
+        
+        # Iteration loop
+        while maxerror >= self.accuracy and self.iter <= self.maxiter:
+            self.iter += 1
+            
+            # Calculate injections
+            for n in range(1, nbus+1):
+                nn = n - nss[n]
+                if kb[n] != 1:  # Not a swing bus
+                    I[nn] = 0
+                    
+                    # Find connections to swing buses
+                    for i in range(len(self.nl)):
+                        nl_i = self.nl[i]
+                        nr_i = self.nr[i]
+                        if nl_i == n or nr_i == n:
+                            if nl_i == n:
+                                l = nr_i
+                            else:
+                                l = nl_i
+                            
+                            if kb[l] == 1:  # Connected to swing bus
+                                I[nn] = I[nn] - self.Ybus[n-1, l-1] * V[l]
+                    
+                    # Update YS diagonal
+                    YS[nn, nn] = Y1[nn, nn] - np.conj(S[n]) / (Vm[n]**2)
+            
+            # Solve system using non-conjugated I (best match to MATLAB)
+            A1 = YS[1:ii+1, 1:ii+1]
+            Vk = np.linalg.solve(A1, I[1:ii+1])
+                
+            # Update voltages and powers
+            Pk = P.copy()
+            Qk = Q.copy()
+            
+            for n in range(1, nbus+1):
+                if kb[n] != 1:  # Not swing bus
+                    nn = n - nss[n]
+                    V[n] = Vk[nn-1]  # Adjust index for 0-based Python
+                    Pk[n] = (abs(V[n])**2) / (Vm[n]**2) * P[n]
+                    Qk[n] = (abs(V[n])**2) / (Vm[n]**2) * Q[n]
+                    Vm[n] = abs(V[n])
+                
+                if kb[n] == 1:  # Swing bus
+                    Pk[n] = P[n]
+                    Qk[n] = Q[n]
+            
+            # Calculate mismatches
+            DP = Pk - P
+            DQ = Qk - Q
+            
+            # Calculate maximum error
+            maxerror = np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))])
+        
+        # Calculate swing bus power
+        for n in range(1, nbus+1):
+            if kb[n] == 1:  # Swing bus
+                S1 = 0
+                for j in range(1, nbus+1):
+                    S1 += np.conj(self.Ybus[n-1, j-1]) * np.conj(V[j])
+                
+                S[n] = V[n] * S1
+                Pk[n] = np.real(S[n])
+                Qk[n] = np.imag(S[n])
+                
+                # Update the generation values for the swing bus
+                P[n] = Pk[n]
+                Q[n] = Qk[n]
+                Pg[n] = P[n] * self.basemva + Pd[n]
+                Qg[n] = Q[n] * self.basemva + Qd[n] - Qsh[n]
+        
+        # Update values
+        P = Pk
+        Q = Qk
+        S = P + 1j * Q
+        
+        # Calculate angles
+        delta = np.angle(V)
+        deltad = 180/np.pi * delta
+        
+        # Create standard-format 0-indexed arrays for compatibility with other methods
+        self.nbus = nbus
+        self.kb = np.zeros(nbus, dtype=int)
+        self.Vm = np.zeros(nbus)
+        self.delta = np.zeros(nbus)
+        self.deltad = np.zeros(nbus)
+        self.P = np.zeros(nbus)
+        self.Q = np.zeros(nbus)
+        self.S = np.zeros(nbus, dtype=complex)
+        self.Pg = np.zeros(nbus)
+        self.Qg = np.zeros(nbus)
+        self.Pd = np.zeros(nbus)
+        self.Qd = np.zeros(nbus)
+        self.Qsh = np.zeros(nbus)
+        self.V = np.zeros(nbus, dtype=complex)
+        
+        # Create correctly-sized yload array
+        self.yload = np.zeros(nbus, dtype=complex)
+        
+        # Map 1-indexed arrays to 0-indexed for compatibility
+        for i in range(nbus):
+            n = int(self.busdata[i, 0])
+            n_idx = i  # 0-indexed position
+            
+            self.kb[n_idx] = kb[n]
+            self.Vm[n_idx] = Vm[n]
+            self.delta[n_idx] = delta[n]
+            self.deltad[n_idx] = deltad[n]
+            self.V[n_idx] = V[n]
+            self.P[n_idx] = P[n]
+            self.Q[n_idx] = Q[n]
+            self.S[n_idx] = S[n]
+            self.Pg[n_idx] = Pg[n]
+            self.Qg[n_idx] = Qg[n]
+            self.Pd[n_idx] = Pd[n]
+            self.Qd[n_idx] = Qd[n]
+            self.Qsh[n_idx] = Qsh[n]
+            
+            # Update yload for line flow calculations
+            self.yload[n_idx] = (Pd[n] - 1j * Qd[n] + 1j * Qsh[n]) / (self.basemva * Vm[n]**2)
+        
+        # Update busdata with new voltage values
+        for i in range(nbus):
+            self.busdata[i, 2] = self.Vm[i]
+            self.busdata[i, 3] = self.deltad[i]
+        
+        # Initialize Pgg and Qgg as lists
+        k = 0
+        self.Pgg = []
+        self.Qgg = []
+        
+        # Populate Pgg and Qgg
+        for n in range(nbus):
+            if self.kb[n] == 1:  # Slack bus
+                k += 1
+                self.Pgg.append(self.Pg[n])
+                self.Qgg.append(self.Qg[n])
+            elif self.kb[n] == 2:  # Generator buses
+                k += 1
+                self.Pgg.append(self.Pg[n])
+                self.Qgg.append(self.Qg[n])
+        
+        # Calculate system totals
+        self.Pgt = np.sum(self.Pg)
+        self.Qgt = np.sum(self.Qg)
+        self.Pdt = np.sum(self.Pd)
+        self.Qdt = np.sum(self.Qd)
+        self.Qsht = np.sum(self.Qsh)
+        self.maxerror = maxerror
+        
+        # Set solution status
+        self.tech = "Power Flow Solution by Power Perturbation Technique"
+
     def busout(self):
         """Print power flow solution in tabulated form"""
         print(self.tech)
