@@ -531,6 +531,246 @@ class PowerSystem:
         # Update busdata with new voltage values
         self.busdata[:, 2] = self.Vm
         self.busdata[:, 3] = self.deltad
+    
+    def decouple(self):
+        """Power flow solution by Fast Decoupled method"""
+        # Initialization
+        ns = 0  # counter for slack buses
+        nbus_int = int(self.nbus)
+        self.Vm = np.zeros(nbus_int)
+        self.delta = np.zeros(nbus_int)
+        self.yload = np.zeros(nbus_int, dtype=complex)
+        self.deltad = np.zeros(nbus_int)
+        self.kb = np.zeros(nbus_int, dtype=int)
+        self.V = np.zeros(nbus_int, dtype=complex)
+        self.P = np.zeros(nbus_int)
+        self.Q = np.zeros(nbus_int)
+        self.S = np.zeros(nbus_int, dtype=complex)
+        self.Pd = np.zeros(nbus_int)
+        self.Qd = np.zeros(nbus_int)
+        self.Pg = np.zeros(nbus_int)
+        self.Qg = np.zeros(nbus_int)
+        self.Qmin = np.zeros(nbus_int)
+        self.Qmax = np.zeros(nbus_int)
+        self.Qsh = np.zeros(nbus_int)
+        nss = np.zeros(nbus_int, dtype=int)  # Cumulative number of slack buses
+        
+        # Process bus data
+        for k in range(len(self.busdata)):
+            n = int(self.busdata[k, 0])
+            n_idx = n - 1  # 0-indexed array
+            
+            self.kb[n_idx] = int(self.busdata[k, 1])
+            self.Vm[n_idx] = self.busdata[k, 2]
+            self.delta[n_idx] = self.busdata[k, 3]
+            self.Pd[n_idx] = self.busdata[k, 4]
+            self.Qd[n_idx] = self.busdata[k, 5]
+            self.Pg[n_idx] = self.busdata[k, 6]
+            self.Qg[n_idx] = self.busdata[k, 7]
+            self.Qmin[n_idx] = self.busdata[k, 8]
+            self.Qmax[n_idx] = self.busdata[k, 9]
+            self.Qsh[n_idx] = self.busdata[k, 10]
+            
+            if self.Vm[n_idx] <= 0:
+                self.Vm[n_idx] = 1.0
+                self.V[n_idx] = 1.0 + 0j
+            else:
+                self.delta[n_idx] = np.pi / 180 * self.delta[n_idx]
+                self.V[n_idx] = self.Vm[n_idx] * (np.cos(self.delta[n_idx]) + 1j * np.sin(self.delta[n_idx]))
+                self.P[n_idx] = (self.Pg[n_idx] - self.Pd[n_idx]) / self.basemva
+                self.Q[n_idx] = (self.Qg[n_idx] - self.Qd[n_idx] + self.Qsh[n_idx]) / self.basemva
+                self.S[n_idx] = self.P[n_idx] + 1j * self.Q[n_idx]
+            
+            if self.kb[n_idx] == 1:  # Count slack buses
+                ns += 1
+            nss[n_idx] = ns
+        
+        # Extract Ybus components
+        Ym = np.abs(self.Ybus)
+        t = np.angle(self.Ybus)
+        
+        # First pass to determine matrix sizes
+        n_nonsw = 0  # non-slack buses (type 0 and 2)
+        n_pq = 0     # PQ buses (type 0)
+        
+        for n in range(nbus_int):
+            if self.kb[n] == 0 or self.kb[n] == 2:
+                n_nonsw += 1
+            if self.kb[n] == 0:
+                n_pq += 1
+        
+        # Create matrices of appropriate size
+        B1 = np.zeros((n_nonsw, n_nonsw))
+        B2 = np.zeros((n_pq, n_pq))
+        
+        # Fill B1 matrix - exactly as in MATLAB
+        ii = 0
+        for ib in range(nbus_int):
+            if self.kb[ib] == 0 or self.kb[ib] == 2:  # non-slack buses
+                ii += 1
+                jj = 0
+                for jb in range(nbus_int):
+                    if self.kb[jb] == 0 or self.kb[jb] == 2:  # non-slack buses
+                        jj += 1
+                        B1[ii-1, jj-1] = np.imag(self.Ybus[ib, jb])
+        
+        # Fill B2 matrix - exactly as in MATLAB
+        ii = 0
+        for ib in range(nbus_int):
+            if self.kb[ib] == 0:  # PQ buses only
+                ii += 1
+                jj = 0
+                for jb in range(nbus_int):
+                    if self.kb[jb] == 0:  # PQ buses only
+                        jj += 1
+                        B2[ii-1, jj-1] = np.imag(self.Ybus[ib, jb])
+        
+        # Invert matrices
+        try:
+            B1inv = np.linalg.inv(B1)
+            B2inv = np.linalg.inv(B2)
+        except np.linalg.LinAlgError:
+            print("Matrix inversion failed. Using pseudoinverse.")
+            B1inv = np.linalg.pinv(B1)
+            B2inv = np.linalg.pinv(B2)
+        
+        # Start iterations
+        self.maxerror = 1.0
+        converge = 1
+        self.iter = 0
+        
+        # Default parameters
+        accuracy = getattr(self, 'accuracy', 0.001)
+        maxiter = getattr(self, 'maxiter', 100)
+        
+        while self.maxerror >= accuracy and self.iter <= maxiter:
+            self.iter += 1
+            
+            # Initialize mismatch arrays
+            DP = np.zeros(n_nonsw)  # for non-slack buses
+            DQ = np.zeros(n_pq)     # for PQ buses only
+            DPV = np.zeros(n_nonsw) # normalized by voltage
+            DQV = np.zeros(n_pq)    # normalized by voltage
+            
+            id_count = 0  # counter for non-slack buses
+            iv_count = 0  # counter for PQ buses
+            
+            # Calculate mismatches for all buses
+            for n in range(nbus_int):
+                # Calculate power at each bus
+                J11 = 0
+                J33 = 0
+                
+                for i in range(self.nbr):
+                    if self.nl[i] - 1 == n or self.nr[i] - 1 == n:
+                        if self.nl[i] - 1 == n:
+                            l = self.nr[i] - 1
+                        else:
+                            l = self.nl[i] - 1
+                        
+                        J11 += self.Vm[n] * self.Vm[l] * Ym[n, l] * np.sin(t[n, l] - self.delta[n] + self.delta[l])
+                        J33 += self.Vm[n] * self.Vm[l] * Ym[n, l] * np.cos(t[n, l] - self.delta[n] + self.delta[l])
+                
+                # Calculate P and Q at each bus
+                Pk = self.Vm[n]**2 * Ym[n, n] * np.cos(t[n, n]) + J33
+                Qk = -self.Vm[n]**2 * Ym[n, n] * np.sin(t[n, n]) - J11
+                
+                # For slack bus, update P and Q
+                if self.kb[n] == 1:
+                    self.P[n] = Pk
+                    self.Q[n] = Qk
+                
+                # For PV buses, update Q and check reactive limits
+                elif self.kb[n] == 2:
+                    self.Q[n] = Qk
+                    
+                    # FIXED: Using Qd instead of Pd for reactive power calculation
+                    Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                    if self.Qmax[n] != 0:
+                        # FIXED: Match MATLAB condition (between iterations 10-20)
+                        if self.iter <= 20 and self.iter >= 10:
+                            if Qgc < self.Qmin[n]:
+                                self.Vm[n] += 0.005
+                            elif Qgc > self.Qmax[n]:
+                                self.Vm[n] -= 0.005
+                
+                # Calculate mismatches for non-slack buses
+                if self.kb[n] != 1:
+                    DP[id_count] = self.P[n] - Pk
+                    DPV[id_count] = (self.P[n] - Pk) / self.Vm[n]
+                    id_count += 1
+                
+                # Calculate mismatches for PQ buses
+                if self.kb[n] == 0:
+                    DQ[iv_count] = self.Q[n] - Qk
+                    DQV[iv_count] = (self.Q[n] - Qk) / self.Vm[n]
+                    iv_count += 1
+            
+            # Solve for angle and voltage corrections
+            Dd = -np.matmul(B1inv, DPV)
+            DV = -np.matmul(B2inv, DQV)
+            
+            # Apply corrections
+            id_count = 0
+            iv_count = 0
+            
+            for n in range(nbus_int):
+                # Update angles for non-slack buses
+                if self.kb[n] != 1:
+                    self.delta[n] += Dd[id_count]
+                    id_count += 1
+                
+                # Update voltages for PQ buses
+                if self.kb[n] == 0:
+                    self.Vm[n] += DV[iv_count]
+                    iv_count += 1
+            
+            # Calculate maximum error
+            self.maxerror = np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))])
+            
+            if self.iter == maxiter and self.maxerror > accuracy:
+                print(f"\nWARNING: Iterative solution did not converge after {self.iter} iterations.\n")
+                converge = 0
+        
+        # Set solution status
+        if converge != 1:
+            self.tech = "ITERATIVE SOLUTION DID NOT CONVERGE"
+        else:
+            self.tech = "Power Flow Solution by Fast Decoupled Method"
+        
+        # Update voltage in rectangular form
+        self.V = self.Vm * (np.cos(self.delta) + 1j * np.sin(self.delta))
+        self.deltad = 180 / np.pi * self.delta
+        
+        # Update bus powers and calculate totals
+        k = 0
+        self.Pgg = []
+        
+        for n in range(nbus_int):
+            if self.kb[n] == 1:  # Slack bus
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Pg[n] = self.P[n] * self.basemva + self.Pd[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                k += 1
+                self.Pgg.append(self.Pg[n])
+            elif self.kb[n] == 2:  # Generator bus
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                k += 1
+                self.Pgg.append(self.Pg[n])
+            
+            self.yload[n] = (self.Pd[n] - 1j * self.Qd[n] + 1j * self.Qsh[n]) / (self.basemva * self.Vm[n]**2)
+        
+        # Calculate system totals
+        self.Pgt = sum(self.Pg)
+        self.Qgt = sum(self.Qg)
+        self.Pdt = sum(self.Pd)
+        self.Qdt = sum(self.Qd)
+        self.Qsht = sum(self.Qsh)
+        
+        # Update busdata with new voltage values
+        self.busdata[:, 2] = self.Vm
+        self.busdata[:, 3] = self.deltad
         
     def busout(self):
         """Print power flow solution in tabulated form"""
