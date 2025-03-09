@@ -1,12 +1,16 @@
 # Power System Analysis Library
 
-A Python implementation of Prof. Hadi Saadat's power system analysis tools originally developed in MATLAB/Octave.
+A comprehensive Python implementation of power system analysis tools, featuring multiple power flow methods (Newton-Raphson, Gauss-Seidel, Fast Decoupled, Power Perturbation), economic dispatch optimization, B-coefficient calculations, and network visualization. Based on Prof. Hadi Saadat's MATLAB/Octave code, this is a pure Python implementation without using pandapower, making it lightweight and self-contained.
 
 ## Overview
 
 This library provides tools for power system analysis, including:
 
-- Power flow analysis using the Newton-Raphson method
+- Power flow analysis using multiple methods:
+  - Newton-Raphson method
+  - Gauss-Seidel method
+  - Fast Decoupled method
+  - Power Perturbation method
 - Line flow and loss calculations
 - B-coefficient loss formula calculation
 - Economic dispatch of generation
@@ -42,6 +46,8 @@ ps.accuracy = 0.001
 ps.maxiter = 10
 
 # Load example data (5-bus system)
+# Bus Bus  Voltage Angle   ---Load---- -------Generator----- Injected
+# No  code Mag.    Degree  MW    Mvar  MW  Mvar Qmin Qmax     Mvar
 busdata = [
     [1, 1, 1.06, 0.0, 0, 0, 0, 0, 10, 50, 0],
     [2, 2, 1.045, 0.0, 20, 10, 40, 30, 10, 50, 0],
@@ -50,6 +56,8 @@ busdata = [
     [5, 0, 1.00, 0.0, 60, 40, 0, 0, 0, 0, 0]
 ]
 
+# Bus bus   R      X     1/2 B   Line code
+# nl  nr  p.u.   p.u.   p.u.     = 1 for lines, > 1 or < 1 tr. tap at bus nl
 linedata = [
     [1, 2, 0.02, 0.06, 0.030, 1],
     [1, 3, 0.08, 0.24, 0.025, 1],
@@ -124,7 +132,9 @@ plt.show()
 - `src/power_position.py`: Network layout algorithms for visualization
 - `examples/`: Directory containing example scripts
   - Power Flow Analysis:
-    - `chapter6_ex11.py`: IEEE 30-bus system power flow analysis
+    - `chapter6_ex11.py`: IEEE 30-bus system with Newton-Raphson method
+    - `chapter6_ex13.py`: IEEE 30-bus system with Fast Decoupled method
+    - `chapter6_ex15.py`: IEEE 30-bus system with Power Perturbation method
   - Economic Dispatch:
     - `chapter7_ex9.py`: Example of B-coefficient calculation
     - `chapter7_ex10.py`: Example of economic dispatch with losses
