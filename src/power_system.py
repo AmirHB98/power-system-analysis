@@ -359,6 +359,179 @@ class PowerSystem:
         self.busdata[:, 2] = self.Vm
         self.busdata[:, 3] = self.deltad
         
+    def lfgauss(self):
+        """Power flow solution by Gauss-Seidel method"""
+        # Initialization
+        nbus_int = int(self.nbus)
+        self.Vm = np.zeros(nbus_int)
+        self.delta = np.zeros(nbus_int)
+        self.yload = np.zeros(nbus_int, dtype=complex)
+        self.deltad = np.zeros(nbus_int)
+        self.kb = np.zeros(nbus_int, dtype=int)
+        self.V = np.zeros(nbus_int, dtype=complex)
+        self.P = np.zeros(nbus_int)
+        self.Q = np.zeros(nbus_int)
+        self.S = np.zeros(nbus_int, dtype=complex)
+        self.Pd = np.zeros(nbus_int)
+        self.Qd = np.zeros(nbus_int)
+        self.Pg = np.zeros(nbus_int)
+        self.Qg = np.zeros(nbus_int)
+        self.Qmin = np.zeros(nbus_int)
+        self.Qmax = np.zeros(nbus_int)
+        self.Qsh = np.zeros(nbus_int)
+        DV = np.zeros(nbus_int)
+        
+        # Process bus data
+        for k in range(len(self.busdata)):
+            n = int(self.busdata[k, 0])
+            n_idx = n - 1  # 0-indexed array
+            
+            self.kb[n_idx] = int(self.busdata[k, 1])
+            self.Vm[n_idx] = self.busdata[k, 2]
+            self.delta[n_idx] = self.busdata[k, 3]
+            self.Pd[n_idx] = self.busdata[k, 4]
+            self.Qd[n_idx] = self.busdata[k, 5]
+            self.Pg[n_idx] = self.busdata[k, 6]
+            self.Qg[n_idx] = self.busdata[k, 7]
+            self.Qmin[n_idx] = self.busdata[k, 8]
+            self.Qmax[n_idx] = self.busdata[k, 9]
+            self.Qsh[n_idx] = self.busdata[k, 10]
+            
+            if self.Vm[n_idx] <= 0:
+                self.Vm[n_idx] = 1.0
+                self.V[n_idx] = 1.0 + 0j
+            else:
+                self.delta[n_idx] = np.pi / 180 * self.delta[n_idx]
+                self.V[n_idx] = self.Vm[n_idx] * (np.cos(self.delta[n_idx]) + 1j * np.sin(self.delta[n_idx]))
+                self.P[n_idx] = (self.Pg[n_idx] - self.Pd[n_idx]) / self.basemva
+                self.Q[n_idx] = (self.Qg[n_idx] - self.Qd[n_idx] + self.Qsh[n_idx]) / self.basemva
+                self.S[n_idx] = self.P[n_idx] + 1j * self.Q[n_idx]
+            
+            DV[n_idx] = 0
+        
+        # Initialize variables for convergence
+        converge = 1
+        Vc = np.zeros(nbus_int, dtype=complex)
+        Sc = np.zeros(nbus_int, dtype=complex)
+        DP = np.zeros(nbus_int, dtype=float)
+        DQ = np.zeros(nbus_int, dtype=float)
+        
+        # Set default parameters if not already set
+        accel = getattr(self, 'accel', 1.3)
+        accuracy = getattr(self, 'accuracy', 0.001)
+        maxiter = getattr(self, 'maxiter', 100)
+        
+        # Start iteration
+        self.iter = 0
+        self.maxerror = 10
+        
+        while self.maxerror >= accuracy and self.iter <= maxiter:
+            self.iter += 1
+            
+            for n in range(nbus_int):
+                YV = 0 + 0j
+                
+                # Calculate voltage contribution from connected buses
+                for L in range(self.nbr):
+                    if self.nl[L] - 1 == n:
+                        k = self.nr[L] - 1
+                        YV += self.Ybus[n, k] * self.V[k]
+                    elif self.nr[L] - 1 == n:
+                        k = self.nl[L] - 1
+                        YV += self.Ybus[n, k] * self.V[k]
+                
+                # Calculate complex power
+                Sc[n] = np.conj(self.V[n]) * (self.Ybus[n, n] * self.V[n] + YV)
+                Sc[n] = np.conj(Sc[n])
+                
+                # Calculate power mismatches
+                DP[n] = self.P[n] - np.real(Sc[n])
+                DQ[n] = self.Q[n] - np.imag(Sc[n])
+                
+                # Slack bus (type 1)
+                if self.kb[n] == 1:
+                    self.S[n] = Sc[n]
+                    self.P[n] = np.real(Sc[n])
+                    self.Q[n] = np.imag(Sc[n])
+                    DP[n] = 0
+                    DQ[n] = 0
+                    Vc[n] = self.V[n]
+                # PV bus (type 2)
+                elif self.kb[n] == 2:
+                    self.Q[n] = np.imag(Sc[n])
+                    self.S[n] = self.P[n] + 1j * self.Q[n]
+                    
+                    # Check reactive power limits for generator buses
+                    if self.Qmax[n] != 0:
+                        Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                        if abs(DQ[n]) <= 0.005 and self.iter >= 10:  # After 10 iterations
+                            if DV[n] <= 0.045:  # Total change not exceeding .05 pu
+                                if Qgc < self.Qmin[n]:
+                                    self.Vm[n] += 0.005
+                                    DV[n] += 0.005
+                                elif Qgc > self.Qmax[n]:
+                                    self.Vm[n] -= 0.005
+                                    DV[n] += 0.005
+                
+                # Calculate new voltage for non-slack buses
+                if self.kb[n] != 1:
+                    Vc[n] = (np.conj(self.S[n]) / np.conj(self.V[n]) - YV) / self.Ybus[n, n]
+                
+                # Update voltage
+                if self.kb[n] == 0:  # PQ bus
+                    self.V[n] += accel * (Vc[n] - self.V[n])
+                elif self.kb[n] == 2:  # PV bus
+                    VcI = np.imag(Vc[n])
+                    VcR = np.sqrt(self.Vm[n]**2 - VcI**2)
+                    Vc[n] = VcR + 1j * VcI
+                    self.V[n] += accel * (Vc[n] - self.V[n])
+            
+            # Check convergence - Fix for the TypeError
+            self.maxerror = float(np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))]))
+            
+            if self.iter == maxiter and self.maxerror > accuracy:
+                print(f"\nWARNING: Iterative solution did not converge after {self.iter} iterations.\n")
+                converge = 0
+        
+        # Set solution status
+        if converge != 1:
+            self.tech = "ITERATIVE SOLUTION DID NOT CONVERGE"
+        else:
+            self.tech = "Power Flow Solution by Gauss-Seidel Method"
+        
+        # Update results
+        k = 0
+        self.Pgg = []  # Initialize as list
+
+        for n in range(nbus_int):
+            self.Vm[n] = abs(self.V[n])
+            self.deltad[n] = np.angle(self.V[n]) * 180 / np.pi
+            
+            if self.kb[n] == 1:  # Slack bus
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Pg[n] = self.P[n] * self.basemva + self.Pd[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                k += 1
+                self.Pgg.append(self.Pg[n])
+            elif self.kb[n] == 2:  # Generator bus
+                k += 1
+                self.Pgg.append(self.Pg[n])
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+            
+            self.yload[n] = (self.Pd[n] - 1j * self.Qd[n] + 1j * self.Qsh[n]) / (self.basemva * self.Vm[n]**2)
+        
+        # Calculate system totals
+        self.Pgt = sum(self.Pg)
+        self.Qgt = sum(self.Qg)
+        self.Pdt = sum(self.Pd)
+        self.Qdt = sum(self.Qd)
+        self.Qsht = sum(self.Qsh)
+        
+        # Update busdata with new voltage values
+        self.busdata[:, 2] = self.Vm
+        self.busdata[:, 3] = self.deltad
+        
     def busout(self):
         """Print power flow solution in tabulated form"""
         print(self.tech)
