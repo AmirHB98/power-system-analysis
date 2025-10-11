@@ -12,41 +12,42 @@ The economic dispatch problem aims to minimize the total generation cost while s
 
 The total generation cost is given by:
 
-```
-Cost = Σ(α_i + β_i*P_i + γ_i*P_i²) for i=1 to n
-```
-
+$$
+\text{Cost} = \sum_{i=1}^n \alpha_i + \beta_i P_i + \gamma_i P_i^2
+$$
 Where:
-- α_i, β_i, γ_i are the cost coefficients for generator i
-- P_i is the power output of generator i
-- n is the number of generators
+- $\alpha_i$, $\beta_i$, $\gamma_i$ are the cost coefficients for generator i
+- $P_i$ is the power output of generator $i$
+- $n$ is the number of generators
 
 ### Constraints
 
 1. **Power Balance Constraint**:
-   ```
-   Σ P_i = P_D + P_L for i=1 to n
-   ```
+   $$
+   \sum_{i=1}^n P_i = P_D + P_L
+   $$
+
    Where:
-   - P_D is the total system demand
-   - P_L is the total transmission loss
+   - $P_D$ is the total system demand
+   - $P_L$ is the total transmission loss
 
 2. **Generator Limits**:
-   ```
-   P_i,min ≤ P_i ≤ P_i,max for i=1 to n
-   ```
+   
+   $$
+   P_i^{min} \le P_i \le P_i^{max} \qquad \forall i \in 1,2, .. , n
+   $$
 
 ### Transmission Loss Formula
 
 The transmission losses are calculated using B-coefficients:
 
-```
-P_L = Σ Σ P_i * B_ij * P_j + Σ B_0i * P_i + B_00 for i,j=1 to n
-```
+$$
+P_L = \sum_{i=1}^n \sum_{j=1}^n P_i B_{ij} + \sum_{i=1}^n B_{0i} P_i + B_{00}
+$$
 
 Where:
-- B_ij, B_0i, B_00 are the loss coefficients
-- P_i, P_j are generator outputs
+- $B_{ij}$, $B_{0i}$, ${B_00}$ are the loss coefficients
+- $P_i$, $P_j$ are generator outputs
 
 ## Algorithm Implementation
 

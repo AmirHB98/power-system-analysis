@@ -12,27 +12,29 @@ The Newton-Raphson method for power flow analysis is based on linearizing the no
 
 For each bus in the power system, we have the following complex power equations:
 
-```
-S_i = P_i + jQ_i = V_i * sum(Y_ij * V_j)* for j=1 to n
-```
+$$
+S_i = P_i + jQ_i = V_i  (\sum_{j=1}^{n} Y_ij * V_j)*
+$$
 
 Where:
-- S_i is the complex power at bus i
-- P_i is the real power at bus i
-- Q_i is the reactive power at bus i
-- V_i is the complex voltage at bus i
-- Y_ij is the (i,j) element of the bus admittance matrix
-- n is the number of buses
+- $S_i$ is the complex power at bus $i$
+- $P_i$ is the real power at bus $i$
+- $Q_i$ is the reactive power at bus $i$
+- $V_i$ is the complex voltage at bus $i$
+- $Y_{ij}$ is the ($i$,$j$) element of the bus admittance matrix
+- $n$ is the number of buses
 
 ### Jacobian Matrix
 
 The Newton-Raphson method uses a Jacobian matrix to linearize the power flow equations. The Jacobian matrix consists of partial derivatives of the power equations with respect to the voltage angles and magnitudes.
 
-```
-[ΔP/Δδ  ΔP/Δ|V|]
-[ΔQ/Δδ  ΔQ/Δ|V|]
-```
+$$
+\begin{vmatrix}
+\frac{\partial P}{\partial \delta} & \frac{\partial P}{\partial |V|} \\
+\frac{\partial Q}{\partial \delta} & \frac{\partial Q}{\partial |V|}
+\end{vmatrix}
 
+$$
 ## Algorithm Implementation
 
 ```mermaid

@@ -12,15 +12,15 @@ The Power Perturbation method is based on the principle of linearizing the power
 
 The method starts with the standard power flow equations:
 
-```
-S_i = V_i * sum(Y_ij * V_j)* for j=1 to n
-```
+$$
+S_i = V_i  (\sum_{j=1}^{n} Y_ij  V_j)* 
+$$
 
 Where:
-- S_i is the complex power at bus i
-- V_i is the complex voltage at bus i
-- Y_ij is the (i,j) element of the bus admittance matrix
-- n is the number of buses
+- $S_i$ is the complex power at bus $i$
+- $V_i$ is the complex voltage at bus $i$
+- $Y_{ij}$ is the ($i$,$j$) element of the bus admittance matrix
+- $n$ is the number of buses
 
 ### Perturbation Approach
 
@@ -32,14 +32,14 @@ The Power Perturbation method reformulates the problem by:
 
 The key equation becomes:
 
-```
-YS[V] = I
-```
+$$
+Y_s  V = I
+$$
 
 Where:
-- YS is a modified admittance matrix that includes power injection terms
-- V is the vector of bus voltages
-- I is a vector of current injections from slack buses
+- $Y_s$ is a modified admittance matrix that includes power injection terms
+- $V$ is the vector of bus voltages
+- $I$ is a vector of current injections from slack buses
 
 ## Algorithm Implementation
 

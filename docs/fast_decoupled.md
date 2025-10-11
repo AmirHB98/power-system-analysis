@@ -19,11 +19,17 @@ The standard Newton-Raphson power flow equations are decoupled into two separate
 [ΔP/|V|] = [B'] [Δδ]
 [ΔQ/|V|] = [B"] [Δ|V|]
 ```
+$$
+[\frac{\Delta P}{\delta}] = [B^{\prime}] [\Delta\delta] 
+$$
+$$
+[\frac{\Delta Q}{|V|}] = [B^{\prime\prime}] [\Delta |V|]
+$$
 
 Where:
-- ΔP and ΔQ are the active and reactive power mismatches
-- Δδ and Δ|V| are the voltage angle and magnitude corrections
-- B' and B" are constant matrices derived from the bus admittance matrix
+- $\Delta P$ and $\Delta Q$ are the active and reactive power mismatches
+- $\Delta \delta$ and $\Delta |V|$ are the voltage angle and magnitude corrections
+- $B^{\prime}$ and $B^{\prime\prime}$ are constant matrices derived from the bus admittance matrix
 
 ## Algorithm Implementation
 
@@ -54,16 +60,16 @@ The Fast Decoupled power flow method is implemented in the `decouple()` method o
    - Process bus data to determine bus types (slack, PV, PQ)
 
 2. **Matrix Formation**:
-   - Form the B' matrix for non-slack buses (PV and PQ)
-   - Form the B" matrix for PQ buses only
+   - Form the $B^{\prime}$ matrix for non-slack buses (PV and PQ)
+   - Form the $B^{\prime\prime}$ matrix for PQ buses only
    - Invert these matrices (done only once)
 
 3. **Iteration Process**:
    - Calculate power mismatches at each bus
    - Normalize mismatches by voltage magnitude
-   - Solve for angle corrections using B' matrix
+   - Solve for angle corrections using $B^{\prime}$ matrix
    - Update voltage angles
-   - Solve for magnitude corrections using B" matrix
+   - Solve for magnitude corrections using $B^{\prime\prime}$ matrix
    - Update voltage magnitudes for PQ buses
    - Check for convergence
 

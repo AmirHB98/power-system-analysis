@@ -12,25 +12,25 @@ The Gauss-Seidel method for power flow analysis is based on iteratively updating
 
 For each bus in the power system, the complex power is given by:
 
-```
-S_i = P_i + jQ_i = V_i * sum(Y_ij * V_j)* for j=1 to n
-```
+$$
+S_i = P_i + j Q_i = V_i  (\sum_{i=1}^{n} Y_{ij} V_j)^*
+$$
 
 Where:
-- S_i is the complex power at bus i
-- P_i is the real power at bus i
-- Q_i is the reactive power at bus i
-- V_i is the complex voltage at bus i
-- Y_ij is the (i,j) element of the bus admittance matrix
-- n is the number of buses
+- $S_i$ is the complex power at bus $i$
+- $P_i$ is the real power at bus $i$
+- $Q_i$ is the reactive power at bus $i$
+- $V_i$ is the complex voltage at bus $i$
+- $Y_{ij}$ is the (i,j) element of the bus admittance matrix
+- $n$ is the number of buses
 
 ### Voltage Update Equation
 
 The Gauss-Seidel method rearranges the power flow equation to solve for the voltage at each bus:
 
-```
-V_i = 1/Y_ii * [(P_i - jQ_i)/V_i* - sum(Y_ij * V_j) for j=1 to n, j≠i]
-```
+$$
+V_i = \frac{1}{Y_{ii}} (\frac{P_i - jQ_i}{V_i^*} - \sum_{\substack{j=1 \\ j \ne i}}^{n} Y_{ij} V_j)
+$$
 
 For PV (generator) buses, the voltage magnitude is kept constant while the angle is updated to maintain the specified real power output.
 
