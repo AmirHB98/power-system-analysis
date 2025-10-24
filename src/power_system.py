@@ -546,23 +546,25 @@ class PowerSystem:
                     self.Q[n] = np.imag(Sc[n])
 
                     # Check reactive power limits for generator buses
-                    Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
 
-                    if Qgc <= self.Qmin[n]:
-                        # If maximum reactive power should be generated,
-                        # nth bust changes to PQ bus from this iteration forward
-                        self.Q[n] = (
-                            self.Qmin[n] + self.Qsh[n] - self.Qd[n]
-                        ) / self.basemva
-                        self.kb[n] = 0
+                    if self.iter >= 10:
+                        Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
 
-                    elif Qgc >= self.Qmax[n]:
-                        # If minimum reactive power shoul be generated,
-                        # nth bust changes to PQ bus from this iteration forward
-                        self.Q[n] = (
-                            self.Qmax[n] + self.Qsh[n] - self.Qd[n]
-                        ) / self.basemva
-                        self.kb[n] = 0
+                        if Qgc <= self.Qmin[n]:
+                            # If maximum reactive power should be generated,
+                            # nth bust changes to PQ bus from this iteration forward
+                            self.Q[n] = (
+                                self.Qmin[n] + self.Qsh[n] - self.Qd[n]
+                            ) / self.basemva
+                            self.kb[n] = 0
+
+                        elif Qgc >= self.Qmax[n]:
+                            # If minimum reactive power shoul be generated,
+                            # nth bust changes to PQ bus from this iteration forward
+                            self.Q[n] = (
+                                self.Qmax[n] + self.Qsh[n] - self.Qd[n]
+                            ) / self.basemva
+                            self.kb[n] = 0
 
                     # Update S
                     self.S[n] = self.P[n] + 1j * self.Q[n]
@@ -579,15 +581,12 @@ class PowerSystem:
                     #             self.Vm[n] -= 0.005
                     #             DV[n] += 0.005
 
-                #######  Redundant inside the loop #########
-                # # Slack bus (type 1)
-                # if self.kb[n] == 1:
-                #     self.S[n] = Sc[n]
-                #     self.P[n] = np.real(Sc[n])
-                #     self.Q[n] = np.imag(Sc[n])
-                #     DP[n] = 0
-                #     DQ[n] = 0
-                #     Vc[n] = self.V[n]
+                # Slack bus (type 1)
+                if self.kb[n] == 1:
+                    self.S[n] = Sc[n]
+                    self.P[n] = np.real(Sc[n])
+                    self.Q[n] = np.imag(Sc[n])
+                    Vc[n] = self.V[n]
 
                 # Calculate new voltage for non-slack buses
                 if self.kb[n] != 1:
@@ -595,7 +594,7 @@ class PowerSystem:
                         n, n
                     ]
 
-                # Update voltage
+                # Update voltages
                 if self.kb[n] == 0:  # PQ bus
                     self.V[n] += accel * (Vc[n] - self.V[n])
                 elif self.kb[n] == 2:  # PV bus
@@ -632,6 +631,9 @@ class PowerSystem:
         k = 0
         self.Pgg = []  # Initialize as list
 
+        # Retrive bus types
+        self.kb = self.busdata[:, 1]
+
         for n in range(nbus_int):
             self.Vm[n] = abs(self.V[n])
             self.deltad[n] = np.angle(self.V[n]) * 180 / np.pi
@@ -658,9 +660,6 @@ class PowerSystem:
         self.Pdt = sum(self.Pd)
         self.Qdt = sum(self.Qd)
         self.Qsht = sum(self.Qsh)
-
-        # Retrive bus types
-        self.kb = self.busdata[:, 1]
 
         # Update busdata with new voltage values
         self.busdata[:, 2] = self.Vm
