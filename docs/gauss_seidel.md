@@ -1,19 +1,24 @@
 # Gauss-Seidel Power Flow Method
 
-## Overview
-
 The Gauss-Seidel method is an iterative technique for solving power flow problems in electrical power systems. It is one of the classical approaches for power flow analysis, known for its simplicity and straightforward implementation. While it may require more iterations to converge compared to Newton-Raphson, it has lower computational requirements per iteration.
 
 ## Mathematical Foundation
 
-The Gauss-Seidel method for power flow analysis is based on iteratively updating voltage magnitudes and angles at each bus using the power flow equations.
+The Gauss-Seidel method is an iterative technique used to solve a system of linear equations. It is named after the German mathematicians Carl Friedrich Gauss and Philipp Ludwig von Seidel. This method is particularly useful for large systems where direct methods like Gaussian elimination are computationally expensive. It operates by sequentially updating each variable using the most recent values available, effectively reformulating each equation to isolate the target variable. Starting from an initial guess, the method proceeds iteratively, refining the solution until convergence is achieved.
+Mathematically, the iteration can be expressed as:
+
+$$
+f(x) = 0 \rightarrow x^{(k+1)} = g(x^{k}) \quad \text{until} \quad |x^{(k+1)} - x^{k}| < \epsilon
+$$
+
+where $x^{(k)}$ denotes the approximation at iteration k, and $\epsilon$ is a predefined tolerance threshold.
 
 ### Power Flow Equations
 
 For each bus in the power system, the complex power is given by:
 
 $$
-S_i = P_i + j Q_i = V_i  (\sum_{i=1}^{n} Y_{ij} V_j)^*
+S_i = P_i + j Q_i = V_i  (\sum_{j=1}^{n} Y_{ij} V_j)^*
 $$
 
 Where:
@@ -24,6 +29,11 @@ Where:
 - $Y_{ij}$ is the (i,j) element of the bus admittance matrix
 - $n$ is the number of buses
 
+It is a common practice to distinct power contribution from other buses and the target bus, itself.
+$$
+S_i = P_i + j Q_i = |V_i|^2 Y_{ii} + V_i (\sum_{\substack{j=1 \\ j \ne i}}^{n} Y_{ij} V_j)
+$$
+
 ### Voltage Update Equation
 
 The Gauss-Seidel method rearranges the power flow equation to solve for the voltage at each bus:
@@ -32,25 +42,38 @@ $$
 V_i = \frac{1}{Y_{ii}} (\frac{P_i - jQ_i}{V_i^*} - \sum_{\substack{j=1 \\ j \ne i}}^{n} Y_{ij} V_j)
 $$
 
-For PV (generator) buses, the voltage magnitude is kept constant while the angle is updated to maintain the specified real power output.
+Similar to power equations, the term with summation in the quation above is known as voltage contribution from other buses.
+
+
+For PV (generator) buses, the voltage magnitude is kept constant while the angle is updated to maintain the specified real power output unless reactive generation boundries are violated.
 
 ## Algorithm Implementation
 
+
 ```mermaid
 flowchart TD
-    A[Start] --> B[Initialize voltage magnitudes and angles]
+    A[Start] --> B[Initialise voltage magnitude and angles]
     B --> C[Form bus admittance matrix Ybus]
-    C --> D[Begin iteration]
-    D --> E[For each bus i]
-    E --> F[Calculate voltage contribution from other buses]
-    F --> G[Calculate complex power at bus i]
-    G --> H[Update voltage based on bus type]
-    H --> I{All buses processed?}
-    I -->|No| E
-    I -->|Yes| J{"Convergence check: max|ΔP, ΔQ| < tolerance?"}
-    J -->|Yes| K[Calculate line flows and losses]
-    J -->|No| D
-    K --> L[End]
+    C --> D[Initialise voltages V and set hyperparameters]
+    D --> E[Calculate complex power Sc according to curent V]
+    E --> O["Convergence check: max|ΔP, ΔQ| < tolerance?"]
+    O --> |No| F[Begin next iteration]
+    O --> |Yes| P[Calculate line flows and losses]
+    P --> Q[End]
+    F --> G[Calculate voltage contribution from other buses]
+    G --> H[Bus type?]
+    H --> |PV| I[Calculate generated reactive power at this bus Qgc regarding Sc]
+    H --> |PQ| J[Update voltage based on bus type]
+    I --> K[Qgc exceeds Qmax?]
+    K --> |Yes| L[Set bus type to PQ, set reactive generation to Qmax]
+    L --> J
+    K --> |No| M[Qgc less than Qmin?]
+    M --> |Yes| N[Set bustype to PQ, set reactive generation to Qmin]
+    N --> J
+    M --> |No| J
+    J --> E
+
+
 ```
 
 <!-- ![Gauss-Seidel Power Flow Method](./flow_gauss_seidel.png) -->
@@ -65,18 +88,19 @@ The Gauss-Seidel power flow method is implemented in the `lfgauss()` method of t
    - Initialize voltage values for all buses
 
 2. **Iteration Process**:
-   - For each bus, calculate the voltage contribution from all connected buses
-   - Calculate complex power at the bus
-   - Calculate power mismatches
-   - Update voltage based on bus type:
-     - For PQ buses: update both magnitude and angle
-     - For PV buses: maintain specified voltage magnitude, update angle
-     - For slack buses: maintain specified voltage magnitude and angle
-   - Check for convergence based on power mismatches
+    - Calculate complex power at the bus
+    - For each bus, calculate the voltage contribution from all connected buses
+    - Update voltage based on bus type:
+        - For PQ buses: update both magnitude and angle
+        - For PV buses: maintain specified voltage magnitude, update angle
+        - For slack buses: maintain specified voltage magnitude and angle
+    - Calculate power mismatches
+    - Check for convergence based on power mismatches
 
 3. **Handling Generator Reactive Power Limits**:
    - For PV buses, check if reactive power limits are violated
-   - Adjust voltage magnitudes if necessary
+   - Set bus type to PQ in this case
+   - Calculate Qbus by setting Qg to Qmax or Qmin 
 
 4. **Acceleration Factor**:
    - Use an acceleration factor to improve convergence speed
