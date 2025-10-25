@@ -7,9 +7,9 @@ The Gauss-Seidel method is an iterative technique for solving power flow problem
 The Gauss-Seidel method is an iterative technique used to solve a system of linear equations. It is named after the German mathematicians Carl Friedrich Gauss and Philipp Ludwig von Seidel. This method is particularly useful for large systems where direct methods like Gaussian elimination are computationally expensive. It operates by sequentially updating each variable using the most recent values available, effectively reformulating each equation to isolate the target variable. Starting from an initial guess, the method proceeds iteratively, refining the solution until convergence is achieved.
 Mathematically, the iteration can be expressed as:
 
-$$
+\[
 f(x) = 0 \rightarrow x^{(k+1)} = g(x^{k}) \quad \text{until} \quad |x^{(k+1)} - x^{k}| < \epsilon
-$$
+\]
 
 where $x^{(k)}$ denotes the approximation at iteration k, and $\epsilon$ is a predefined tolerance threshold.
 
@@ -17,9 +17,9 @@ where $x^{(k)}$ denotes the approximation at iteration k, and $\epsilon$ is a pr
 
 For each bus in the power system, the complex power is given by:
 
-$$
+\[
 S_i = P_i + j Q_i = V_i  (\sum_{j=1}^{n} Y_{ij} V_j)^*
-$$
+\]
 
 Where:
 - $S_i$ is the complex power at bus $i$
@@ -30,17 +30,17 @@ Where:
 - $n$ is the number of buses
 
 It is a common practice to distinct power contribution from other buses and the target bus, itself.
-$$
+\[
 S_i = P_i + j Q_i = |V_i|^2 Y_{ii} + V_i (\sum_{\substack{j=1 \\ j \ne i}}^{n} Y_{ij} V_j)
-$$
+\]
 
 ### Voltage Update Equation
 
 The Gauss-Seidel method rearranges the power flow equation to solve for the voltage at each bus:
 
-$$
+\[
 V_i = \frac{1}{Y_{ii}} (\frac{P_i - jQ_i}{V_i^*} - \sum_{\substack{j=1 \\ j \ne i}}^{n} Y_{ij} V_j)
-$$
+\]
 
 Similar to power equations, the term with summation in the quation above is known as voltage contribution from other buses.
 
@@ -89,6 +89,7 @@ The Gauss-Seidel power flow method is implemented in the `lfgauss()` method of t
 
 2. **Iteration Process**:
     - Calculate complex power at the bus
+    
     - For each bus, calculate the voltage contribution from all connected buses
     - Update voltage based on bus type:
         - For PQ buses: update both magnitude and angle
@@ -126,15 +127,9 @@ def lfgauss(self):
         
         for n in range(nbus_int):
             YV = 0 + 0j
-            
-            # Calculate voltage contribution from connected buses
-            for L in range(self.nbr):
-                if self.nl[L] - 1 == n:
-                    k = self.nr[L] - 1
-                    YV += self.Ybus[n, k] * self.V[k]
-                elif self.nr[L] - 1 == n:
-                    k = self.nl[L] - 1
-                    YV += self.Ybus[n, k] * self.V[k]
+            # Calculate voltage contribution from other buses
+            elm_Y = np.delete(self.Ybus[n, :], n)
+            YV = np.dot(elm_Y, np.transpose(np.delete(self.V, n)))
             
             # Calculate complex power
             Sc[n] = np.conj(self.V[n]) * (self.Ybus[n, n] * self.V[n] + YV)
@@ -143,7 +138,26 @@ def lfgauss(self):
             # Calculate power mismatches
             DP[n] = self.P[n] - np.real(Sc[n])
             DQ[n] = self.Q[n] - np.imag(Sc[n])
-            
+
+            # Ensure that generated reactive power on PV buses are within the limits
+            # If not, turn them to PQ buses
+
+            if Qgc <= self.Qmin[n]:
+                # If maximum reactive power should be generated,
+                # nth bust changes to PQ bus from this iteration forward
+                self.Q[n] = (
+                    self.Qmin[n] + self.Qsh[n] - self.Qd[n]
+                ) / self.basemva
+                self.kb[n] = 0
+
+            elif Qgc >= self.Qmax[n]:
+                # If minimum reactive power shoul be generated,
+                # nth bust changes to PQ bus from this iteration forward
+                self.Q[n] = (
+                    self.Qmax[n] + self.Qsh[n] - self.Qd[n]
+                ) / self.basemva
+                self.kb[n] = 0
+
             # Update voltage based on bus type
             # ...
             
