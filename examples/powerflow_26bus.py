@@ -9,7 +9,6 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import PowerSystem directly
-from src.power_position import generate_power_system_positions
 from src.power_system import PowerSystem
 from src.power_viz import create_bus_table, plot_power_system
 
@@ -122,30 +121,68 @@ print("\n=========== Gauss-Seidel Method Results ===========")
 ps.busout()
 
 # Calculate line flows and losses
-ps.lineflow()
+# ps.lineflow()
 
 # Compare with Newton-Raphson (optional)
 print("\n=========== Running Newton-Raphson for Comparison ===========")
 ps_newton = PowerSystem()
 ps_newton.load_data(busdata, linedata)
 ps_newton.lfybus()
-ps_newton.lfnewton()
+ps_newton.newton_raphson()  # change it back later
 print("\n=========== Newton-Raphson Method Results ===========")
 ps_newton.busout()
+
+
+print("\n=========== Running Decoupled Newton-Raphson for Comparison ===========")
+ps_dnewton = PowerSystem()
+ps_dnewton.load_data(busdata, linedata)
+ps_dnewton.lfybus()
+ps_dnewton.nr_decoupled()
+print("\n=========== Decoupled Newton-Raphson Method Results ===========")
+ps_dnewton.busout()
+
+
+print("\n=========== Running Fast Decoupled Newton-Raphson for Comparison ===========")
+ps_fd = PowerSystem()
+ps_fd.load_data(busdata, linedata)
+ps_fd.lfybus()
+ps_fd.fast_decoupled()
+print("\n=========== Fast Decoupled Newton-Raphson Method Results ===========")
+ps_fd.busout()
 
 # Visualization
 print("\nCreating visualization...")
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
 
+# Get position
 
 # Plot both results
-pos = generate_power_system_positions(ps, "kamada_kawai")
 plot_power_system(ps, ax=ax1, title="26-Bus System (Gauss-Seidel)")
 plot_power_system(ps_newton, ax=ax2, title="26-Bus System (Newton-Raphson)")
 
 plt.tight_layout()
 plt.show()
 
+print("\nCreating visualization...")
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
+
+# Get positions
+
+
+# Plot both results
+plot_power_system(
+    ps_dnewton,
+    ax=ax1,
+    title="IEEE 30-Bus System (Decoupled Newton-Raphson)",
+)
+plot_power_system(
+    ps_fd,
+    ax=ax2,
+    title="IEEE 30-Bus System (Fast Decoupled Newton-Raphson)",
+)
+
+plt.tight_layout()
+plt.show()
 # Create tables
 bus_df_gs = create_bus_table(ps)
 bus_df_nr = create_bus_table(ps_newton)
@@ -160,5 +197,3 @@ print(f"Number of iterations for Gauss-Seidel: {ps.iter}")
 print(f"Number of iterations for Newton-Raphson: {ps_newton.iter}")
 
 print("\nProgram completed successfully.")
-
-# %%

@@ -7,7 +7,7 @@ class PowerSystem:
         # System parameters
         self.basemva = 100.0
         self.accuracy = 0.001
-        self.maxiter = 10
+        self.maxiter = 100
 
         # Bus data
         self.nbus = 0
@@ -165,7 +165,7 @@ class PowerSystem:
         B = self.remove_row_cols(self.B, slack_idx, slack_idx)
 
         self.delta = np.linalg.solve(B, P)
-        self.delta = np.insert(self.delta, 0,0)
+        self.delta = np.insert(self.delta, 0, 0)
         self.Vm = np.ones(self.nbus)
 
         self.V = self.Vm * np.exp(1j * self.delta)
@@ -200,6 +200,7 @@ class PowerSystem:
         self.Qmin = zeros(nbus_int)  # Minmum generatable power
         self.Qmax = zeros(nbus_int)  # Maximum generatable power
         self.Qsh = zeros(nbus_int)  # Reactive power produced by shunt capacitance
+        self.yload = zeros(nbus_int, dtype=complex)
 
         # Process bus data
         for k in range(len(self.busdata)):
@@ -225,7 +226,7 @@ class PowerSystem:
         self.delta = np.deg2rad(self.deltad)  # Voltage angle in radius
         self.V = np.multiply(self.Vm, np.cos(self.delta) + 1j * np.sin(self.delta))
         # Complex voltage values
-        self.P = (self.Pg - self.Qg) / self.basemva
+        self.P = (self.Pg - self.Pd) / self.basemva
         # Total scheduled P (for PQ and PV bus)
         self.Q = (self.Qg + self.Qsh - self.Qd) / self.basemva
         # Total scheduled Q (for PQ bus only)
@@ -234,24 +235,62 @@ class PowerSystem:
 
         # Count original number of bus types
         bus_types = {"PQ": self.kb.tolist().count(0), "PV": self.kb.tolist().count(2)}
+        bus_type_inds = {
+            "PQ": np.where(self.kb == 0)[0].tolist(),
+            "PV": np.where(self.kb == 2)[0].tolist(),
+            "Slack": np.where(self.kb == 1)[0].tolist(),
+        }
 
         # Create magnitude and angle matrix for Ybus
         Ybus_m = np.abs(self.Ybus)
         Ybus_a = np.angle(self.Ybus)
 
-        self.iter += 1
-
         # Hyper parameters
         self.maxerror = 1.0
+        accuracy = getattr(self, "accuracy", 0.001)
+        maxiter = getattr(self, "maxiter", 100)
+        accel = getattr(self, "accel", 1.8)
         converge = 1
         self.iter = 0
-        kb = self.kb
+        kb = self.kb.copy()
 
         # Starting iterations
         while self.maxerror >= self.accuracy and self.iter <= self.maxiter:
 
             # Calculate complex power with new voltage values
             Sc = np.multiply(self.V, np.conj(np.dot(self.V, self.Ybus)))
+
+            # Updating bus types
+            for n in bus_type_inds["PV"]:
+                self.Q[n] = np.imag(Sc[n])
+
+                # Check reactive power limits for generator buses
+                if self.iter >= 5:
+                    Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+
+                    if Qgc < self.Qmin[n]:
+                        # If maximum reactive power should be generated,
+                        # nth bust changes to PQ bus from this iteration forward
+                        self.Q[n] = (
+                            self.Qmin[n] + self.Qsh[n] - self.Qd[n]
+                        ) / self.basemva
+                        kb[n] = 0
+
+                    elif Qgc > self.Qmax[n]:
+                        # If minimum reactive power shoul be generated,
+                        # nth bust changes to PQ bus from this iteration forward
+                        self.Q[n] = (
+                            self.Qmax[n] + self.Qsh[n] - self.Qd[n]
+                        ) / self.basemva
+                        kb[n] = 0
+
+                    # Update S
+                    self.S[n] = self.P[n] + 1j * self.Q[n]
+
+            for n in bus_type_inds["Slack"]:
+                self.S[n] = Sc[n]
+                self.P[n] = np.real(Sc[n])
+                self.Q[n] = np.imag(Sc[n])
 
             # Discoveing number of equations
             bus_types = {"PQ": kb.tolist().count(0), "PV": kb.tolist().count(2)}
@@ -264,12 +303,24 @@ class PowerSystem:
             # Calculating power mismatch for P and Q
             # DP is a vector with n-1 elements (slack removed)
             # DQ is a vector with n-m-1 elements (slack and pvs removed)
-            DP = np.delete(self.P - np.real(Sc), bus_type_inds["Slack"])
-            DQ = np.delete(
-                self.Q - np.imag(Sc), bus_type_inds["PV"] + bus_type_inds["Slack"]
-            )
+            # DP = np.delete(self.P - np.real(Sc), bus_type_inds["Slack"])
+            # DQ = np.delete(
+            #     self.Q - np.imag(Sc), bus_type_inds["PV"] + bus_type_inds["Slack"]
+            # )
+            DP = self.P - np.real(Sc)
+            DQ = self.Q - np.imag(Sc)
 
             self.maxerror = float(np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))]))
+
+            if self.iter == maxiter and self.maxerror > accuracy:
+                print(
+                    f"\nWARNING: Iterative solution did not converge after {self.iter} iterations.\n"
+                )
+                converge = 0
+
+                break
+
+            self.iter += 1
 
             # Create Jacobians
             # J1 shows the first quarter of the Jacobian matrix that is difference of P w.r. to delta
@@ -284,7 +335,7 @@ class PowerSystem:
                             * self.Vm[j]
                             * Ybus_m[i, j]
                             * np.sin(Ybus_a[i, j] - self.delta[i] + self.delta[j])
-                            if n != j
+                            if i != j
                             else 0
                         )
                         for j in range(nbus_int)
@@ -339,7 +390,7 @@ class PowerSystem:
                             * self.Vm[j]
                             * Ybus_m[i, j]
                             * np.cos(Ybus_a[i, j] - self.delta[i] + self.delta[j])
-                            if n != j
+                            if i != j
                             else 0
                         )
                         for j in range(nbus_int)
@@ -381,7 +432,7 @@ class PowerSystem:
 
             tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
             tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
-            J4 = self.remove_row_cols(J2_raw, tbr_r, tbr_c)
+            J4 = self.remove_row_cols(J4_raw, tbr_r, tbr_c)
 
             # Now Jacobian quarters should be concatenated
             # J shape should be (2n -m -2,2n -m -2)
@@ -389,24 +440,561 @@ class PowerSystem:
             J_Q = np.hstack((J3, J4))
             J = np.vstack((J_P, J_Q))
 
-            # Power mismatch vectors should also be concatenated
-            DPQ = np.hstack((DP, DQ))
+            elm_DQ = np.delete(DQ, bus_type_inds["Slack"] + bus_type_inds["PV"])
+            elm_DP = np.delete(DP, bus_type_inds["Slack"])
 
-            DV = np.dot(DPQ, np.linalg.inv(J))
+            # Power mismatch vectors should also be concatenated
+            DPQ = np.hstack((elm_DP, elm_DQ))
+
+            DV = np.linalg.solve(J, DPQ)
+
+            assert DV.shape == (
+                2 * bus_types["PQ"] + bus_types["PV"],
+            ), "DV shape does not agree"
 
             Ddelta_raw = DV[: nbus_int - 1]  # n -1 voltage angles
-            DVm = DV[nbus_int - 1 :].tolist()  # n-m-1 voltage magnitudes
+            DVm = DV[nbus_int - 1 :]  # n-m-1 voltage magnitudes
 
             Ddelta = np.insert(Ddelta_raw, bus_type_inds["Slack"], 0)
             all_inds = bus_type_inds["Slack"] + bus_type_inds["PV"]
             for k in all_inds:
                 DVm = np.insert(DVm, k, 0)
 
+            assert (
+                sum([DVm[k] != 0 for k in all_inds]) == 0
+            ), "Bus voltage magnitude should not change at PV and slack buses"
             # Update Voltages
             self.Vm += DVm
             self.delta += Ddelta
+            self.deltad = np.rad2deg(self.delta)
+            self.V = self.Vm * (np.exp(1j * self.delta))
 
-            self.V = self.Vm * np.exp(1j * self.delta)
+        # Set solution status
+        if converge != 1:
+            self.tech = "ITERATIVE SOLUTION DID NOT CONVERGE"
+        else:
+            self.tech = "Power Flow Solution by Newton-Raphson Method"
+        # Update results
+        k = 0
+        self.Pgg = []  # Initialize as list
+
+        for n in range(nbus_int):
+
+            if self.kb[n] == 1:  # Slack bus
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Pg[n] = self.P[n] * self.basemva + self.Pd[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                k += 1
+                self.Pgg.append(self.Pg[n])
+            elif self.kb[n] == 2:  # Generator bus
+                k += 1
+                self.Pgg.append(self.Pg[n])
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+
+            self.yload[n] = (self.Pd[n] - 1j * self.Qd[n] + 1j * self.Qsh[n]) / (
+                self.basemva * self.Vm[n] ** 2
+            )
+
+        # Calculate system totals
+        self.Pgt = sum(self.Pg)
+        self.Qgt = sum(self.Qg)
+        self.Pdt = sum(self.Pd)
+        self.Qdt = sum(self.Qd)
+        self.Qsht = sum(self.Qsh)
+
+        # Update busdata with new voltage values
+        self.busdata[:, 2] = self.Vm
+        self.busdata[:, 3] = self.deltad
+
+    def nr_decoupled(self):
+        self.Vm = zeros(int(self.nbus))  # initialise voltage magnitudes
+        self.delta = zeros(int(self.nbus))  # initialise voltage phases in rad
+        self.yload = zeros(int(self.nbus), dtype=complex)
+        self.deltad = zeros(int(self.nbus))  # initialise voltage phases in deg
+        self.kb = zeros(int(self.nbus), dtype=int)  # initialise bus types
+
+        nbus_int = int(self.nbus)
+
+        # Initialize arrays
+        self.P = zeros(nbus_int)  # Bus scheduled active power
+        self.Q = zeros(nbus_int)  # Bus scheduled reactive power
+        self.V = zeros(nbus_int, dtype=complex)
+        self.S = zeros(nbus_int, dtype=complex)
+        self.Pd = zeros(nbus_int)  # Active power demand at each bus
+        self.Qd = zeros(nbus_int)  # Reactive power demand at each bus
+        self.Pg = zeros(nbus_int)  # Active power generation at each bus
+        self.Qg = zeros(nbus_int)  # Reactive power generation at each bus
+        self.Qmin = zeros(nbus_int)  # Minmum generatable power
+        self.Qmax = zeros(nbus_int)  # Maximum generatable power
+        self.Qsh = zeros(nbus_int)  # Reactive power produced by shunt capacitance
+        self.yload = zeros(nbus_int, dtype=complex)
+
+        # Process bus data
+        for k in range(len(self.busdata)):
+            n = int(self.busdata[k, 0])
+            n_idx = n - 1  # 0-indexed array
+
+            self.kb[n_idx] = int(self.busdata[k, 1])
+            self.Vm[n_idx] = self.busdata[k, 2]
+            self.deltad[n_idx] = self.busdata[k, 3]
+            self.Pd[n_idx] = self.busdata[k, 4]
+            self.Qd[n_idx] = self.busdata[k, 5]
+            self.Pg[n_idx] = self.busdata[k, 6]
+            self.Qg[n_idx] = self.busdata[k, 7]
+            self.Qmin[n_idx] = self.busdata[k, 8]
+            self.Qmax[n_idx] = self.busdata[k, 9]
+            self.Qsh[n_idx] = self.busdata[k, 10]
+
+            if self.Vm[n_idx] <= 0:
+                # Correct any mistakes in input initial voltages
+                self.Vm[n_idx] = 1.0
+                self.V[n_idx] = 1.0 + 0j
+
+        self.delta = np.deg2rad(self.deltad)  # Voltage angle in radius
+        self.V = np.multiply(self.Vm, np.cos(self.delta) + 1j * np.sin(self.delta))
+        # Complex voltage values
+        self.P = (self.Pg - self.Pd) / self.basemva
+        # Total scheduled P (for PQ and PV bus)
+        self.Q = (self.Qg + self.Qsh - self.Qd) / self.basemva
+        # Total scheduled Q (for PQ bus only)
+        self.S = self.P + 1j * self.Q
+        # Scheduled complex power
+
+        # Count original number of bus types
+        bus_types = {"PQ": self.kb.tolist().count(0), "PV": self.kb.tolist().count(2)}
+        bus_type_inds = {
+            "PQ": np.where(self.kb == 0)[0].tolist(),
+            "PV": np.where(self.kb == 2)[0].tolist(),
+            "Slack": np.where(self.kb == 1)[0].tolist(),
+        }
+
+        # Create magnitude and angle matrix for Ybus
+        Ybus_m = np.abs(self.Ybus)
+        Ybus_a = np.angle(self.Ybus)
+
+        # Hyper parameters
+        self.maxerror = 1.0
+        accuracy = getattr(self, "accuracy", 0.001)
+        maxiter = getattr(self, "maxiter", 100)
+        accel = getattr(self, "accel", 1.8)
+        converge = 1
+        self.iter = 0
+        kb = self.kb.copy()
+
+        # Starting iterations
+        while self.maxerror >= self.accuracy and self.iter <= self.maxiter:
+
+            # Calculate complex power with new voltage values
+            Sc = np.multiply(self.V, np.conj(np.dot(self.V, self.Ybus)))
+
+            # Updating bus types
+            for n in bus_type_inds["PV"]:
+                self.Q[n] = np.imag(Sc[n])
+
+                # Check reactive power limits for generator buses
+                if self.iter >= 3:
+                    Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+
+                    if Qgc < self.Qmin[n]:
+                        # If maximum reactive power should be generated,
+                        # nth bust changes to PQ bus from this iteration forward
+                        self.Q[n] = (
+                            self.Qmin[n] + self.Qsh[n] - self.Qd[n]
+                        ) / self.basemva
+                        kb[n] = 0
+
+                    elif Qgc > self.Qmax[n]:
+                        # If minimum reactive power shoul be generated,
+                        # nth bust changes to PQ bus from this iteration forward
+                        self.Q[n] = (
+                            self.Qmax[n] + self.Qsh[n] - self.Qd[n]
+                        ) / self.basemva
+                        kb[n] = 0
+
+                    # Update S
+                    self.S[n] = self.P[n] + 1j * self.Q[n]
+
+            for n in bus_type_inds["Slack"]:
+                self.S[n] = Sc[n]
+                self.P[n] = np.real(Sc[n])
+                self.Q[n] = np.imag(Sc[n])
+
+            # Discoveing number of equations
+            bus_types = {"PQ": kb.tolist().count(0), "PV": kb.tolist().count(2)}
+            bus_type_inds = {
+                "PQ": np.where(kb == 0)[0].tolist(),
+                "PV": np.where(kb == 2)[0].tolist(),
+                "Slack": np.where(kb == 1)[0].tolist(),
+            }
+
+            # Calculating power mismatch for P and Q
+            # DP is a vector with n-1 elements (slack removed)
+            # DQ is a vector with n-m-1 elements (slack and pvs removed)
+            # DP = np.delete(self.P - np.real(Sc), bus_type_inds["Slack"])
+            # DQ = np.delete(
+            #     self.Q - np.imag(Sc), bus_type_inds["PV"] + bus_type_inds["Slack"]
+            # )
+            DP = self.P - np.real(Sc)
+            DQ = self.Q - np.imag(Sc)
+
+            self.maxerror = float(np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))]))
+
+            if self.iter == maxiter and self.maxerror > accuracy:
+                print(
+                    f"\nWARNING: Iterative solution did not converge after {self.iter} iterations.\n"
+                )
+                converge = 0
+
+                break
+
+            self.iter += 1
+
+            # Create Jacobians
+            # J1 shows the first quarter of the Jacobian matrix that is difference of P w.r. to delta
+            # J1 has n-1 x n-1 shape
+            rows = []
+            for i in range(nbus_int):
+
+                row = np.array(
+                    [
+                        (
+                            -self.Vm[i]
+                            * self.Vm[j]
+                            * Ybus_m[i, j]
+                            * np.sin(Ybus_a[i, j] - self.delta[i] + self.delta[j])
+                            if i != j
+                            else 0
+                        )
+                        for j in range(nbus_int)
+                    ]
+                )
+                row[i] = -np.sum(row)
+                rows.append(row)
+            J1_raw = np.vstack(rows)
+
+            # Remove the slack bus
+            tbr_r = bus_type_inds["Slack"]  # rows to be removed
+            tbr_c = bus_type_inds["Slack"]  # columns to be removed
+            J1 = self.remove_row_cols(J1_raw, tbr_r, tbr_c)
+
+            # J2 shows the second quarter of the Jacobian matrix. Difference of P w.r. to Vm
+            # J2 has n-1 x n-m-1 shape,
+
+            # J3 is the third quarter of the Jacobian matrix. Difference of Q w.r. to delta
+            # J3 has n-m-1 x n-1 shape,
+
+            # J4 is the fourth quarter of the Jacobian matrix. Difference of Q w.r. to Vm
+            # J4 has n-m-1 x n-m-1 shape
+
+            cols = []
+            for i in range(nbus_int):
+                col = np.array(
+                    [
+                        (
+                            (
+                                -self.Vm[j]
+                                * Ybus_m[i, j]
+                                * np.sin(Ybus_a[i, j] - self.delta[j] + self.delta[i])
+                            )
+                            if i != j
+                            else 0
+                        )
+                        for j in range(nbus_int)
+                    ]
+                )
+                col[i] = np.sum(col) - 2 * self.Vm[i] * Ybus_m[i, i] * np.sin(
+                    Ybus_a[i, i]
+                )
+                cols.append(col)
+            J4_raw = np.column_stack(cols)
+
+            tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
+            tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
+            J4 = self.remove_row_cols(J4_raw, tbr_r, tbr_c)
+
+            elm_DQ = np.delete(DQ, bus_type_inds["Slack"] + bus_type_inds["PV"])
+            elm_DP = np.delete(DP, bus_type_inds["Slack"])
+
+            Ddelta_raw = np.linalg.solve(J1, elm_DP)
+            DVm = np.linalg.solve(J4, elm_DQ)
+
+            assert DVm.shape == (bus_types["PQ"],), "DVm shape does not agree"
+
+            assert Ddelta_raw.shape == (
+                bus_types["PQ"] + bus_types["PV"],
+            ), "DVangle does not agree"
+
+            Ddelta = np.insert(Ddelta_raw, bus_type_inds["Slack"], 0)
+            all_inds = bus_type_inds["Slack"] + bus_type_inds["PV"]
+            for k in all_inds:
+                DVm = np.insert(DVm, k, 0)
+
+            assert (
+                sum([DVm[k] != 0 for k in all_inds]) == 0
+            ), "Bus voltage magnitude should not change at PV and slack buses"
+            # Update Voltages
+            self.Vm += DVm
+            self.delta += Ddelta
+            self.deltad = np.rad2deg(self.delta)
+            self.V = self.Vm * (np.exp(1j * self.delta))
+
+        # Set solution status
+        if converge != 1:
+            self.tech = "ITERATIVE SOLUTION DID NOT CONVERGE"
+        else:
+            self.tech = "Power Flow Solution by Newton-Raphson Method"
+        # Update results
+        k = 0
+        self.Pgg = []  # Initialize as list
+
+        for n in range(nbus_int):
+
+            if self.kb[n] == 1:  # Slack bus
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Pg[n] = self.P[n] * self.basemva + self.Pd[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                k += 1
+                self.Pgg.append(self.Pg[n])
+            elif self.kb[n] == 2:  # Generator bus
+                k += 1
+                self.Pgg.append(self.Pg[n])
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+
+            self.yload[n] = (self.Pd[n] - 1j * self.Qd[n] + 1j * self.Qsh[n]) / (
+                self.basemva * self.Vm[n] ** 2
+            )
+
+        # Calculate system totals
+        self.Pgt = sum(self.Pg)
+        self.Qgt = sum(self.Qg)
+        self.Pdt = sum(self.Pd)
+        self.Qdt = sum(self.Qd)
+        self.Qsht = sum(self.Qsh)
+
+        # Update busdata with new voltage values
+        self.busdata[:, 2] = self.Vm
+        self.busdata[:, 3] = self.deltad
+
+    def fast_decoupled(self):
+        self.Vm = zeros(int(self.nbus))  # initialise voltage magnitudes
+        self.delta = zeros(int(self.nbus))  # initialise voltage phases in rad
+        self.yload = zeros(int(self.nbus), dtype=complex)
+        self.deltad = zeros(int(self.nbus))  # initialise voltage phases in deg
+        self.kb = zeros(int(self.nbus), dtype=int)  # initialise bus types
+
+        nbus_int = int(self.nbus)
+
+        # Initialize arrays
+        self.P = zeros(nbus_int)  # Bus scheduled active power
+        self.Q = zeros(nbus_int)  # Bus scheduled reactive power
+        self.V = zeros(nbus_int, dtype=complex)
+        self.S = zeros(nbus_int, dtype=complex)
+        self.Pd = zeros(nbus_int)  # Active power demand at each bus
+        self.Qd = zeros(nbus_int)  # Reactive power demand at each bus
+        self.Pg = zeros(nbus_int)  # Active power generation at each bus
+        self.Qg = zeros(nbus_int)  # Reactive power generation at each bus
+        self.Qmin = zeros(nbus_int)  # Minmum generatable power
+        self.Qmax = zeros(nbus_int)  # Maximum generatable power
+        self.Qsh = zeros(nbus_int)  # Reactive power produced by shunt capacitance
+        self.yload = zeros(nbus_int, dtype=complex)
+
+        # Process bus data
+        for k in range(len(self.busdata)):
+            n = int(self.busdata[k, 0])
+            n_idx = n - 1  # 0-indexed array
+
+            self.kb[n_idx] = int(self.busdata[k, 1])
+            self.Vm[n_idx] = self.busdata[k, 2]
+            self.deltad[n_idx] = self.busdata[k, 3]
+            self.Pd[n_idx] = self.busdata[k, 4]
+            self.Qd[n_idx] = self.busdata[k, 5]
+            self.Pg[n_idx] = self.busdata[k, 6]
+            self.Qg[n_idx] = self.busdata[k, 7]
+            self.Qmin[n_idx] = self.busdata[k, 8]
+            self.Qmax[n_idx] = self.busdata[k, 9]
+            self.Qsh[n_idx] = self.busdata[k, 10]
+
+            if self.Vm[n_idx] <= 0:
+                # Correct any mistakes in input initial voltages
+                self.Vm[n_idx] = 1.0
+                self.V[n_idx] = 1.0 + 0j
+
+        self.delta = np.deg2rad(self.deltad)  # Voltage angle in radius
+        self.V = np.multiply(self.Vm, np.cos(self.delta) + 1j * np.sin(self.delta))
+        # Complex voltage values
+        self.P = (self.Pg - self.Pd) / self.basemva
+        # Total scheduled P (for PQ and PV bus)
+        self.Q = (self.Qg + self.Qsh - self.Qd) / self.basemva
+        # Total scheduled Q (for PQ bus only)
+        self.S = self.P + 1j * self.Q
+        # Scheduled complex power
+
+        # Count original number of bus types
+        bus_types = {"PQ": self.kb.tolist().count(0), "PV": self.kb.tolist().count(2)}
+        bus_type_inds = {
+            "PQ": np.where(self.kb == 0)[0].tolist(),
+            "PV": np.where(self.kb == 2)[0].tolist(),
+            "Slack": np.where(self.kb == 1)[0].tolist(),
+        }
+
+        # Create magnitude and angle matrix for Ybus
+        B = np.imag(self.Ybus)
+
+        # Hyper parameters
+        self.maxerror = 1.0
+        accuracy = getattr(self, "accuracy", 0.001)
+        maxiter = getattr(self, "maxiter", 100)
+        accel = getattr(self, "accel", 1.8)
+        converge = 1
+        self.iter = 0
+        kb = self.kb.copy()
+
+        # Starting iterations
+        while self.maxerror >= self.accuracy and self.iter <= self.maxiter:
+
+            # Calculate complex power with new voltage values
+            Sc = np.multiply(self.V, np.conj(np.dot(self.V, self.Ybus)))
+
+            # Updating bus types
+            for n in bus_type_inds["PV"]:
+                self.Q[n] = np.imag(Sc[n])
+
+                # Check reactive power limits for generator buses
+                if self.iter >= 3:
+                    Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+
+                    if Qgc < self.Qmin[n]:
+                        # If maximum reactive power should be generated,
+                        # nth bust changes to PQ bus from this iteration forward
+                        self.Q[n] = (
+                            self.Qmin[n] + self.Qsh[n] - self.Qd[n]
+                        ) / self.basemva
+                        kb[n] = 0
+
+                    elif Qgc > self.Qmax[n]:
+                        # If minimum reactive power shoul be generated,
+                        # nth bust changes to PQ bus from this iteration forward
+                        self.Q[n] = (
+                            self.Qmax[n] + self.Qsh[n] - self.Qd[n]
+                        ) / self.basemva
+                        kb[n] = 0
+
+                    # Update S
+                    self.S[n] = self.P[n] + 1j * self.Q[n]
+
+            for n in bus_type_inds["Slack"]:
+                self.S[n] = Sc[n]
+                self.P[n] = np.real(Sc[n])
+                self.Q[n] = np.imag(Sc[n])
+
+            # Discoveing number of equations
+            bus_types = {"PQ": kb.tolist().count(0), "PV": kb.tolist().count(2)}
+            bus_type_inds = {
+                "PQ": np.where(kb == 0)[0].tolist(),
+                "PV": np.where(kb == 2)[0].tolist(),
+                "Slack": np.where(kb == 1)[0].tolist(),
+            }
+
+            # Calculating power mismatch for P and Q
+            # DP is a vector with n-1 elements (slack removed)
+            # DQ is a vector with n-m-1 elements (slack and pvs removed)
+            # DP = np.delete(self.P - np.real(Sc), bus_type_inds["Slack"])
+            # DQ = np.delete(
+            #     self.Q - np.imag(Sc), bus_type_inds["PV"] + bus_type_inds["Slack"]
+            # )
+            DP = self.P - np.real(Sc)
+            DQ = self.Q - np.imag(Sc)
+
+            self.maxerror = float(np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))]))
+
+            if self.iter == maxiter and self.maxerror > accuracy:
+                print(
+                    f"\nWARNING: Iterative solution did not converge after {self.iter} iterations.\n"
+                )
+                converge = 0
+
+                break
+
+            self.iter += 1
+
+            # Create Jacobians
+
+            # Remove the slack bus
+            tbr_r = bus_type_inds["Slack"]  # rows to be removed
+            tbr_c = bus_type_inds["Slack"]  # columns to be removed
+            B1 = self.remove_row_cols(B, tbr_r, tbr_c)
+
+            tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
+            tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
+            B2 = self.remove_row_cols(B, tbr_r, tbr_c)
+
+            elm_DQ = np.delete(
+                np.divide(DQ, self.Vm), bus_type_inds["Slack"] + bus_type_inds["PV"]
+            )
+            elm_DP = np.delete(np.divide(DP, self.Vm), bus_type_inds["Slack"])
+
+            Ddelta_raw = -np.linalg.solve(B1, elm_DP)
+            DVm = -np.linalg.solve(B2, elm_DQ)
+
+            assert DVm.shape == (bus_types["PQ"],), "DVm shape does not agree"
+
+            assert Ddelta_raw.shape == (
+                bus_types["PQ"] + bus_types["PV"],
+            ), "DVangle does not agree"
+
+            Ddelta = np.insert(Ddelta_raw, bus_type_inds["Slack"], 0)
+            all_inds = bus_type_inds["Slack"] + bus_type_inds["PV"]
+            for k in all_inds:
+                DVm = np.insert(DVm, k, 0)
+
+            assert (
+                sum([DVm[k] != 0 for k in all_inds]) == 0
+            ), "Bus voltage magnitude should not change at PV and slack buses"
+            # Update Voltages
+            self.Vm += DVm
+            self.delta += Ddelta
+            self.deltad = np.rad2deg(self.delta)
+            self.V = self.Vm * (np.exp(1j * self.delta))
+
+        # Set solution status
+        if converge != 1:
+            self.tech = "ITERATIVE SOLUTION DID NOT CONVERGE"
+        else:
+            self.tech = "Power Flow Solution by Newton-Raphson Method"
+        # Update results
+        k = 0
+        self.Pgg = []  # Initialize as list
+
+        for n in range(nbus_int):
+
+            if self.kb[n] == 1:  # Slack bus
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Pg[n] = self.P[n] * self.basemva + self.Pd[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+                k += 1
+                self.Pgg.append(self.Pg[n])
+            elif self.kb[n] == 2:  # Generator bus
+                k += 1
+                self.Pgg.append(self.Pg[n])
+                self.S[n] = self.P[n] + 1j * self.Q[n]
+                self.Qg[n] = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
+
+            self.yload[n] = (self.Pd[n] - 1j * self.Qd[n] + 1j * self.Qsh[n]) / (
+                self.basemva * self.Vm[n] ** 2
+            )
+
+        # Calculate system totals
+        self.Pgt = sum(self.Pg)
+        self.Qgt = sum(self.Qg)
+        self.Pdt = sum(self.Pd)
+        self.Qdt = sum(self.Qd)
+        self.Qsht = sum(self.Qsh)
+
+        # Update busdata with new voltage values
+        self.busdata[:, 2] = self.Vm
+        self.busdata[:, 3] = self.deltad
 
     def lfnewton(self):
         """Power flow solution by Newton-Raphson method"""
@@ -465,7 +1053,7 @@ class PowerSystem:
 
             self.delta = np.deg2rad(self.deltad)
             self.V = np.multiply(self.Vm, np.cos(self.delta) + 1j * np.sin(self.delta))
-            self.P = (self.Pg - self.Qg) / self.basemva
+            self.P = (self.Pg - self.Pd) / self.basemva
             self.Q = (self.Qg + self.Qsh - self.Qd) / self.basemva
             self.S = self.P + 1j * self.Q
 
@@ -845,7 +1433,7 @@ class PowerSystem:
 
                     # Check reactive power limits for generator buses
 
-                    if self.iter >= 10:
+                    if self.iter >= 7:
                         Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
 
                         if Qgc <= self.Qmin[n]:
@@ -902,9 +1490,7 @@ class PowerSystem:
                     self.V[n] += accel * (Vc[n] - self.V[n])
 
                 # Update complex power with new voltage value
-                Sc = np.multiply(
-                    self.V, np.conj(np.dot(self.Ybus, np.transpose(self.V)))
-                )
+                Sc = np.multiply(self.V, np.conj(np.dot(self.V, self.Ybus)))
 
             # P and Q error
             DP = self.P - np.real(Sc)
