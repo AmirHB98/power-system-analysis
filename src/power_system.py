@@ -842,6 +842,17 @@ class PowerSystem:
         # Create magnitude and angle matrix for Ybus
         B = np.imag(self.Ybus)
 
+        # Remove the slack bus
+        tbr_r = bus_type_inds["Slack"]  # rows to be removed
+        tbr_c = bus_type_inds["Slack"]  # columns to be removed
+        B1 = self.remove_row_cols(B, tbr_r, tbr_c)
+        B1_inv = np.linalg.inv(B1)
+
+        tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
+        tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
+        B2 = self.remove_row_cols(B, tbr_r, tbr_c)
+        B2_inv = np.linalg.inv(B2)
+
         # Hyper parameters
         self.maxerror = 1.0
         accuracy = getattr(self, "accuracy", 0.001)
@@ -856,6 +867,8 @@ class PowerSystem:
 
             # Calculate complex power with new voltage values
             Sc = np.multiply(self.V, np.conj(np.dot(self.V, self.Ybus)))
+
+            flag = False
 
             # Updating bus types
             for n in bus_type_inds["PV"]:
@@ -872,6 +885,7 @@ class PowerSystem:
                             self.Qmin[n] + self.Qsh[n] - self.Qd[n]
                         ) / self.basemva
                         kb[n] = 0
+                        flag = True
 
                     elif Qgc > self.Qmax[n]:
                         # If minimum reactive power shoul be generated,
@@ -880,6 +894,7 @@ class PowerSystem:
                             self.Qmax[n] + self.Qsh[n] - self.Qd[n]
                         ) / self.basemva
                         kb[n] = 0
+                        flag = True
 
                     # Update S
                     self.S[n] = self.P[n] + 1j * self.Q[n]
@@ -896,6 +911,12 @@ class PowerSystem:
                 "PV": np.where(kb == 2)[0].tolist(),
                 "Slack": np.where(kb == 1)[0].tolist(),
             }
+            # if a PV bus has turned to PQ bus, Recalculate B2
+            if flag:
+                tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
+                tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
+                B2 = self.remove_row_cols(B, tbr_r, tbr_c)
+                B2_inv = np.linalg.inv(B2)
 
             # Calculating power mismatch for P and Q
             # DP is a vector with n-1 elements (slack removed)
@@ -921,22 +942,13 @@ class PowerSystem:
 
             # Create Jacobians
 
-            # Remove the slack bus
-            tbr_r = bus_type_inds["Slack"]  # rows to be removed
-            tbr_c = bus_type_inds["Slack"]  # columns to be removed
-            B1 = self.remove_row_cols(B, tbr_r, tbr_c)
-
-            tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
-            tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
-            B2 = self.remove_row_cols(B, tbr_r, tbr_c)
-
             elm_DQ = np.delete(
                 np.divide(DQ, self.Vm), bus_type_inds["Slack"] + bus_type_inds["PV"]
             )
             elm_DP = np.delete(np.divide(DP, self.Vm), bus_type_inds["Slack"])
 
-            Ddelta_raw = -np.linalg.solve(B1, elm_DP)
-            DVm = -np.linalg.solve(B2, elm_DQ)
+            Ddelta_raw = -np.dot(elm_DP, B1_inv)
+            DVm = -np.dot(elm_DQ, B2_inv)
 
             assert DVm.shape == (bus_types["PQ"],), "DVm shape does not agree"
 

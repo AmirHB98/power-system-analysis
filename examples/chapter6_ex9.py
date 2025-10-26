@@ -2,6 +2,7 @@
 # Imports
 import os
 import sys
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -114,10 +115,12 @@ ps.load_data(busdata, linedata)
 ps.lfybus()
 
 # Run the Gauss-Seidel power flow
+t1 = time.time()
 ps.lfgauss()
-
+t2 = time.time()
 # Print the power flow solution
 print("\n=========== Gauss-Seidel Method Results ===========")
+print("Runtime: ", t2 - t1)
 ps.busout()
 
 # Calculate line flows and losses
@@ -128,8 +131,12 @@ print("\n=========== Running Newton-Raphson for Comparison ===========")
 ps_newton = PowerSystem()
 ps_newton.load_data(busdata, linedata)
 ps_newton.lfybus()
-ps_newton.newton_raphson()  # change it back later
+t1 = time.time()
+ps_newton.newton_raphson()
+t2 = time.time()
+
 print("\n=========== Newton-Raphson Method Results ===========")
+print("Runtime: ", t2 - t1)
 ps_newton.busout()
 
 
@@ -137,8 +144,11 @@ print("\n=========== Running Decoupled Newton-Raphson for Comparison ===========
 ps_dnewton = PowerSystem()
 ps_dnewton.load_data(busdata, linedata)
 ps_dnewton.lfybus()
+t1 = time.time()
 ps_dnewton.nr_decoupled()
+t2 = time.time()
 print("\n=========== Decoupled Newton-Raphson Method Results ===========")
+print("Runtime: ", t2 - t1)
 ps_dnewton.busout()
 
 
@@ -146,9 +156,25 @@ print("\n=========== Running Fast Decoupled Newton-Raphson for Comparison ======
 ps_fd = PowerSystem()
 ps_fd.load_data(busdata, linedata)
 ps_fd.lfybus()
+t1 = time.time()
 ps_fd.fast_decoupled()
+t2 = time.time()
 print("\n=========== Fast Decoupled Newton-Raphson Method Results ===========")
+print("Runtime: ", t2 - t1)
 ps_fd.busout()
+
+
+print("\n=========== Running DC for Comparison ===========")
+ps_dc = PowerSystem()
+ps_dc.load_data(busdata, linedata)
+ps_dc.lfybus()
+t1 = time.time()
+ps_dc.lfdc()
+t2 = time.time()
+print("\n=========== DC Method Results ===========")
+print("Runtime: ", t2 - t1)
+ps_dc.busout()
+
 
 # Visualization
 print("\nCreating visualization...")

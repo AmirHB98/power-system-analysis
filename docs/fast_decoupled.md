@@ -15,16 +15,11 @@ The Fast Decoupled method is based on two key simplifications of the Newton-Raph
 
 The standard Newton-Raphson power flow equations are decoupled into two separate sets:
 
-```
-[ΔP/|V|] = [B'] [Δδ]
-[ΔQ/|V|] = [B"] [Δ|V|]
-```
-$$
-[\frac{\Delta P}{\delta}] = [B^{\prime}] [\Delta\delta] 
-$$
-$$
-[\frac{\Delta Q}{|V|}] = [B^{\prime\prime}] [\Delta |V|]
-$$
+\[
+   \begin{matrix}
+   [\frac{\Delta P}{|V|}] = [B^{\prime}] [\Delta\delta] & [\frac{\Delta Q}{|V|}] = [B^{\prime\prime}] [\Delta |V|]
+   \end{matrix}
+\]
 
 Where:
 - $\Delta P$ and $\Delta Q$ are the active and reactive power mismatches
@@ -37,23 +32,27 @@ Where:
 flowchart TD
     A[Start] --> B[Initialize voltage magnitudes and angles]
     B --> C[Form bus admittance matrix Ybus]
-    C --> D["Form B' and B'' matrices"]
-    D --> E[Calculate power mismatches ΔP and ΔQ]
-    E --> F{"Convergence check: max|ΔP, ΔQ| < tolerance?"}
-    F -->|Yes| G[Calculate line flows and losses]
-    F -->|No| H["Solve for angle corrections: Δδ = -inv(B')·ΔP/|V|"]
-    H --> I[Update voltage angles]
-    I --> J["Solve for magnitude corrections: Δ|V| = -inv(B'')·ΔQ/|V|"]
-    J --> K[Update voltage magnitudes]
-    K --> E
-    G --> L[End]
+    C --> D["Discover bus types (slack,PV and PQ)"]
+    D --> E["Calculte inv(B') by removing slack bus index from imag(Ybus)"]
+    E --> F["Calculate inv(B'') by removing slack and PV bus indices from imag(Ybus)"]
+    F --> G["Calculate power mismatches ΔP and ΔQ divide them by |V|"]
+    G --> H{"Convergence check: max(|ΔP|, |ΔQ|) < tolerance?"}
+    H --> |Yes| I[Calculate line flows and losses]
+    H --> |No| O[Are Q generation limits vilated in PV buses?]
+    O --> |Yes| P["Set the bus type to PQ, Track bus type indices and recalculate inv(B'')"]
+    O --> |No| J["Solve for angle corrections: Δδ = -inv(B')·ΔP/|V|"]
+    P --> J
+    J --> K[Update voltage angles]
+    K --> L["Solve for magnitude corrections: Δ|V| = -inv(B'')·ΔQ/|V|"]
+    L --> M[Update voltage magnitudes]
+    M --> G
+    I --> N[End]
 ```
 
-<!-- ![Fast Decoupled Power Flow Method](./flow_fast_decoupled.png) -->
 
 ## Implementation Details
 
-The Fast Decoupled power flow method is implemented in the `decouple()` method of the `PowerSystem` class. Here's a breakdown of the key steps:
+The Fast Decoupled power flow method is implemented in the `fast_decoupled()` method of the `PowerSystem` class. Here's a breakdown of the key steps:
 
 1. **Initialization**:
    - Set up arrays for bus voltages, angles, and power values
@@ -65,6 +64,7 @@ The Fast Decoupled power flow method is implemented in the `decouple()` method o
    - Invert these matrices (done only once)
 
 3. **Iteration Process**:
+   - Track bus type indices
    - Calculate power mismatches at each bus
    - Normalize mismatches by voltage magnitude
    - Solve for angle corrections using $B^{\prime}$ matrix
@@ -75,7 +75,7 @@ The Fast Decoupled power flow method is implemented in the `decouple()` method o
 
 4. **Handling Generator Reactive Power Limits**:
    - For PV buses, check if reactive power limits are violated
-   - Adjust voltage magnitudes if necessary
+   - If limits are violated change bus type to PQ
 
 ## Code Excerpt
 
@@ -85,31 +85,46 @@ def decouple(self):
     # Initialization and bus data processing
     # ...
     
-    # Create matrices of appropriate size
-    B1 = np.zeros((n_nonsw, n_nonsw))  # B' matrix for non-slack buses
-    B2 = np.zeros((n_pq, n_pq))        # B" matrix for PQ buses only
+    # Form the suspetance matrix
+    B = np.imag(Ybus)
+
+    # Create a dictionary to track bus types
+    bus_type_inds = {
+            "PQ": np.where(self.kb == 0)[0].tolist(),
+            "PV": np.where(self.kb == 2)[0].tolist(),
+            "Slack": np.where(self.kb == 1)[0].tolist(),
+        }
     
-    # Fill B1 and B2 matrices
-    # ...
-    
-    # Invert matrices (done only once)
-    B1inv = np.linalg.inv(B1)
-    B2inv = np.linalg.inv(B2)
-    
+    kb = self.kb.copy()
     # Start iterations
     while self.maxerror >= accuracy and self.iter <= maxiter:
-        # Calculate mismatches
-        # ...
-        
-        # Solve for angle and voltage corrections
-        Dd = -np.matmul(B1inv, DPV)  # Angle corrections
-        DV = -np.matmul(B2inv, DQV)  # Voltage magnitude corrections
-        
-        # Apply corrections
-        # ...
-        
-        # Calculate maximum error
-        self.maxerror = np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))])
+      # Update P and Q according to current states
+       Sc = np.multiply(self.V, np.conj(np.dot(self.V, self.Ybus)))
+
+      # if Q limits are violated in PV buses, set Qg to Qmax or Qmin and change bus type to PQ
+      for n in bus_type_inds["PV"]:
+         # ...
+         kb[n] = 0
+
+      
+      # Update bus type dictionary
+
+      # Update B2 and inv(B2)
+
+      
+      # Calculate changes in voltage phase and magnitude
+      Ddelta = np.linalg.solve(B1, elm_DP)
+      DVm = np.linalg.solve(B2, elm_DQ)
+
+      # Add zeros for PV and slack buses in DVm
+      # Add a zero for slack bus in Ddelata
+
+      # Update voltage phases and magnitudes
+      self.delta += Ddelta
+      self.Vm += DVm
+      
+      # Calculate maximum error
+      self.maxerror = np.max([np.max(np.abs(DP)), np.max(np.abs(DQ))])
 ```
 
 ## Advantages and Limitations
