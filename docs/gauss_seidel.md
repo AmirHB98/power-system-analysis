@@ -22,12 +22,12 @@ S_i = P_i + j Q_i = V_i  (\sum_{j=1}^{n} Y_{ij} V_j)^*
 \]
 
 Where:
-- $S_i$ is the complex power at bus $i$
-- $P_i$ is the real power at bus $i$
-- $Q_i$ is the reactive power at bus $i$
-- $V_i$ is the complex voltage at bus $i$
-- $Y_{ij}$ is the (i,j) element of the bus admittance matrix
-- $n$ is the number of buses
+- \(S_i\) is the complex power at bus \(i\)
+- \(P_i\) is the real power at bus \(i\)
+- \(Q_i\) is the reactive power at bus \(i\)
+- \(V_i\) is the complex voltage at bus \(i\)
+- \(Y_{ij}\) is the (\(i,j\)) element of the bus admittance matrix
+- \(n\) is the number of buses
 
 It is a common practice to distinct power contribution from other buses and the target bus, itself.
 \[
