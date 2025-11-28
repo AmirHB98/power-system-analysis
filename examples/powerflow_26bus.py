@@ -9,6 +9,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import PowerSystem directly
+from src.power_position import get_system_positions
 from src.power_system import PowerSystem
 from src.power_viz import create_bus_table, plot_power_system
 
@@ -53,6 +54,10 @@ busdata = [
     [25, 0, 1.00, 0.0, 28, 13, 0, 0, 0, 0, 0],
     [26, 2, 1.015, 0.0, 40, 20, 60, 0, 15, 50, 0],
 ]
+
+# for i in range(len(busdata)):
+#     busdata[i][4] = busdata[i][4] * 0.5
+#     busdata[i][5] = busdata[i][5] * 0.5
 
 # Line data
 # Bus bus   R      X     1/2 B   Line code
@@ -106,7 +111,6 @@ linedata = [
     [23, 25, 0.09870, 0.11680, 0.00000, 1],
 ]
 
-
 # Load the data
 ps.load_data(busdata, linedata)
 
@@ -132,6 +136,7 @@ ps_newton.newton_raphson()  # change it back later
 print("\n=========== Newton-Raphson Method Results ===========")
 ps_newton.busout()
 
+ps_newton.lineflow()
 
 print("\n=========== Running Decoupled Newton-Raphson for Comparison ===========")
 ps_dnewton = PowerSystem()
@@ -150,6 +155,7 @@ ps_fd.fast_decoupled()
 print("\n=========== Fast Decoupled Newton-Raphson Method Results ===========")
 ps_fd.busout()
 
+
 # Visualization
 print("\nCreating visualization...")
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
@@ -157,8 +163,11 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
 # Get position
 
 # Plot both results
-plot_power_system(ps, ax=ax1, title="26-Bus System (Gauss-Seidel)")
-plot_power_system(ps_newton, ax=ax2, title="26-Bus System (Newton-Raphson)")
+pos = get_system_positions(ps, system_name="26-bus")
+plot_power_system(ps, ax=ax1, node_positions=pos, title="26-Bus System (Gauss-Seidel)")
+plot_power_system(
+    ps_newton, ax=ax2, node_positions=pos, title="26-Bus System (Newton-Raphson)"
+)
 
 plt.tight_layout()
 plt.show()
@@ -173,19 +182,20 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
 plot_power_system(
     ps_dnewton,
     ax=ax1,
-    title="IEEE 30-Bus System (Decoupled Newton-Raphson)",
+    title="26-Bus System (Decoupled Newton-Raphson)",
 )
 plot_power_system(
     ps_fd,
     ax=ax2,
-    title="IEEE 30-Bus System (Fast Decoupled Newton-Raphson)",
+    title="26-Bus System (Fast Decoupled Newton-Raphson)",
 )
 
 plt.tight_layout()
-plt.show()
+# plt.show()
 # Create tables
 bus_df_gs = create_bus_table(ps)
 bus_df_nr = create_bus_table(ps_newton)
+
 
 # Print max absolute difference between the two methods
 vm_diff = np.abs(ps.Vm - ps_newton.Vm)

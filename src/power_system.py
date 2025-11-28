@@ -265,7 +265,7 @@ class PowerSystem:
                 self.Q[n] = np.imag(Sc[n])
 
                 # Check reactive power limits for generator buses
-                if self.iter >= 5:
+                if self.iter >= 6:
                     Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
 
                     if Qgc < self.Qmin[n]:
@@ -352,27 +352,21 @@ class PowerSystem:
 
             # J2 shows the second quarter of the Jacobian matrix. Difference of P w.r. to Vm
             # J2 has n-1 x n-m-1 shape,
-            cols = []
+            rows = []
             for i in range(nbus_int):
                 col = np.array(
                     [
                         (
-                            (
-                                self.Vm[j]
-                                * Ybus_m[i, j]
-                                * np.cos(Ybus_a[i, j] - self.delta[j] + self.delta[i])
-                            )
-                            if i != j
-                            else 0
+                            Ybus_m[i, j]
+                            * np.cos(Ybus_a[i, j] - self.delta[i] + self.delta[j])
                         )
                         for j in range(nbus_int)
                     ]
                 )
-                col[i] = np.sum(col) + 2 * self.Vm[i] * Ybus_m[i, i] * np.cos(
-                    Ybus_a[i, i]
-                )
-                cols.append(col)
-            J2_raw = np.column_stack(cols)
+                row = self.Vm[i] * col
+                row[i] += np.dot(col, self.Vm)
+                rows.append(row)
+            J2_raw = np.vstack(rows)
 
             tbr_r = bus_type_inds["Slack"]
             tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
@@ -408,27 +402,21 @@ class PowerSystem:
             # J4 is the fourth quarter of the Jacobian matrix. Difference of Q w.r. to Vm
             # J4 has n-m-1 x n-m-1 shape
 
-            cols = []
+            rows = []
             for i in range(nbus_int):
                 col = np.array(
                     [
                         (
-                            (
-                                -self.Vm[j]
-                                * Ybus_m[i, j]
-                                * np.sin(Ybus_a[i, j] - self.delta[j] + self.delta[i])
-                            )
-                            if i != j
-                            else 0
+                            Ybus_m[i, j]
+                            * np.sin(Ybus_a[i, j] - self.delta[i] + self.delta[j])
                         )
                         for j in range(nbus_int)
                     ]
                 )
-                col[i] = np.sum(col) - 2 * self.Vm[i] * Ybus_m[i, i] * np.sin(
-                    Ybus_a[i, i]
-                )
-                cols.append(col)
-            J4_raw = np.column_stack(cols)
+                row = -self.Vm[i] * col
+                row[i] -= np.dot(col, self.Vm)
+                rows.append(row)
+            J4_raw = np.vstack(rows)
 
             tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
             tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
@@ -439,6 +427,9 @@ class PowerSystem:
             J_P = np.hstack((J1, J2))
             J_Q = np.hstack((J3, J4))
             J = np.vstack((J_P, J_Q))
+
+            # print(f"iteration {self.iter} J: ")
+            # print(J)
 
             elm_DQ = np.delete(DQ, bus_type_inds["Slack"] + bus_type_inds["PV"])
             elm_DP = np.delete(DP, bus_type_inds["Slack"])
@@ -687,27 +678,22 @@ class PowerSystem:
             # J4 is the fourth quarter of the Jacobian matrix. Difference of Q w.r. to Vm
             # J4 has n-m-1 x n-m-1 shape
 
-            cols = []
+            rows = []
             for i in range(nbus_int):
                 col = np.array(
                     [
                         (
-                            (
-                                -self.Vm[j]
-                                * Ybus_m[i, j]
-                                * np.sin(Ybus_a[i, j] - self.delta[j] + self.delta[i])
-                            )
-                            if i != j
-                            else 0
+                            Ybus_m[i, j]
+                            * np.sin(Ybus_a[i, j] - self.delta[i] + self.delta[j])
                         )
                         for j in range(nbus_int)
                     ]
                 )
-                col[i] = np.sum(col) - 2 * self.Vm[i] * Ybus_m[i, i] * np.sin(
-                    Ybus_a[i, i]
-                )
-                cols.append(col)
-            J4_raw = np.column_stack(cols)
+                row = -self.Vm[i] * col
+                row[i] -= np.dot(col, self.Vm)
+                rows.append(row)
+
+            J4_raw = np.vstack(rows)
 
             tbr_r = bus_type_inds["Slack"] + bus_type_inds["PV"]
             tbr_c = bus_type_inds["Slack"] + bus_type_inds["PV"]
@@ -743,7 +729,7 @@ class PowerSystem:
         if converge != 1:
             self.tech = "ITERATIVE SOLUTION DID NOT CONVERGE"
         else:
-            self.tech = "Power Flow Solution by Newton-Raphson Method"
+            self.tech = "Power Flow Solution by Decoupled Newton-Raphson Method"
         # Update results
         k = 0
         self.Pgg = []  # Initialize as list
@@ -974,7 +960,7 @@ class PowerSystem:
         if converge != 1:
             self.tech = "ITERATIVE SOLUTION DID NOT CONVERGE"
         else:
-            self.tech = "Power Flow Solution by Newton-Raphson Method"
+            self.tech = "Power Flow Solution by Fast Decoupled Newton-Raphson Method"
         # Update results
         k = 0
         self.Pgg = []  # Initialize as list
@@ -1445,7 +1431,7 @@ class PowerSystem:
 
                     # Check reactive power limits for generator buses
 
-                    if self.iter >= 7:
+                    if self.iter >= 3:
                         Qgc = self.Q[n] * self.basemva + self.Qd[n] - self.Qsh[n]
 
                         if Qgc <= self.Qmin[n]:
